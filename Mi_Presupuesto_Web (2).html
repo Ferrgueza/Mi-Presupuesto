@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1E2761">
+<title>Mi Presupuesto</title>
+<style>
+  :root{
+    --navy:#1E2761;
+    --navy-dark:#141A47;
+    --ice:#CADCFC;
+    --teal:#1C9C8F;
+    --gold:#E3A831;
+    --gray:#5B6472;
+    --light-gray:#8A94A6;
+    --offwhite:#F4F7FD;
+    --red:#C0392B;
+    --red-bg:#FCEAEA;
+    --border:#E3E8F2;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--offwhite);
+    color:var(--navy);
+    -webkit-tap-highlight-color:transparent;
+  }
+  h1,h2,h3{font-family:Georgia,"Times New Roman",serif; margin:0;}
+  #app{
+    max-width:520px;
+    margin:0 auto;
+    min-height:100vh;
+    background:var(--offwhite);
+    display:flex;
+    flex-direction:column;
+    padding-bottom:76px;
+  }
+  header{
+    background:var(--navy);
+    color:#fff;
+    padding:22px 20px 18px;
+    position:sticky;
+    top:0;
+    z-index:20;
+  }
+  header h1{font-size:22px;}
+  header p{margin:4px 0 0; font-size:12.5px; color:var(--ice); opacity:.9;}
+
+  main{flex:1; padding:16px 14px 8px;}
+
+  .month-scroller{
+    display:flex; gap:8px; overflow-x:auto; padding:4px 2px 10px;
+    -webkit-overflow-scrolling:touch;
+  }
+  .month-pill{
+    flex:0 0 auto;
+    padding:8px 14px;
+    border-radius:999px;
+    background:#fff;
+    border:1px solid var(--border);
+    color:var(--navy);
+    font-size:13px;
+    font-weight:600;
+    white-space:nowrap;
+  }
+  .month-pill.active{background:var(--navy); color:#fff; border-color:var(--navy);}
+  .month-pill.filled:not(.active){border-color:var(--teal); color:var(--teal);}
+
+  .card{
+    background:#fff;
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:16px;
+    margin-bottom:14px;
+  }
+  .card h3{font-size:15px; color:var(--navy); margin-bottom:10px;}
+  .field{margin-bottom:12px;}
+  .field label{
+    display:block; font-size:12.5px; color:var(--gray); margin-bottom:5px; font-weight:600;
+  }
+  .field .hint{font-size:11px; color:var(--light-gray); font-weight:400; display:block; margin-top:2px;}  input[type=number], select{
+    width:100%;
+    font-size:16px;
+    padding:11px 12px;
+    border-radius:10px;
+    border:1.5px solid var(--border);
+    background:#FFFDF3;
+    color:var(--navy);
+    font-weight:600;
+  }
+  input[type=number]:focus, select:focus{outline:2px solid var(--gold); border-color:var(--gold);}
+  input::placeholder{color:var(--light-gray); font-weight:400;}
+
+  .result-row{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:8px 0; border-bottom:1px dashed var(--border); font-size:13.5px;
+  }
+  .result-row:last-child{border-bottom:none;}
+  .result-row .label{color:var(--gray);}
+  .result-row .value{font-weight:700; color:var(--navy);}
+
+  .result-row.expandable-head{cursor:pointer; user-select:none;}
+  .result-row.expandable-head .label{display:flex; align-items:center; gap:6px;}
+  .arrow{
+    display:inline-block; font-size:10px; color:var(--light-gray);
+    transition:transform .18s ease; transform:rotate(0deg);
+  }
+  .arrow.open{transform:rotate(90deg); color:var(--navy);}
+  .sub-rows{
+    max-height:0; overflow:hidden; transition:max-height .2s ease;
+  }
+  .sub-rows.open{max-height:240px;}
+  .result-row.sub{padding:6px 0 6px 16px; font-size:12px; border-bottom:none;}
+  .result-row.sub .label{color:var(--light-gray);}
+  .result-row.sub .value{color:var(--gray); font-weight:600;}
+
+  .dest-grid{display:flex; flex-direction:column; gap:10px; margin-top:4px;}
+  .dest-card{
+    border-radius:12px; padding:14px; color:#fff; display:flex; justify-content:space-between; align-items:center;
+  }
+  .dest-card .name{font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; opacity:.9;}
+  .dest-card .amount{font-size:20px; font-weight:800; margin-top:2px;}
+  .dest-card.ing{background:var(--navy);}
+  .dest-card.tr{background:var(--teal);}
+  .dest-card.san{background:var(--gold);}
+  .dest-card.san.negative{background:var(--red);}
+
+  .warn-banner{
+    background:var(--red-bg); color:var(--red); border:1px solid #F3C6C1;
+    border-radius:10px; padding:10px 12px; font-size:12.5px; margin-top:10px; font-weight:600;
+  }
+  .ok-banner{
+    background:#E7F5F2; color:var(--teal); border:1px solid #BFE6DF;
+    border-radius:10px; padding:10px 12px; font-size:12px; margin-top:10px;
+  }
+
+  .kpi-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px;}
+  .kpi{
+    background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px;
+  }
+  .kpi .big{font-size:19px; font-weight:800; color:var(--navy);}
+  .kpi .lbl{font-size:11px; color:var(--gray); margin-top:2px; line-height:1.3;}
+
+  .goal-card{border:1px solid var(--border); border-radius:12px; padding:12px; margin-bottom:10px;}
+  .goal-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
+  .goal-name{font-weight:700; font-size:14px; color:var(--navy);}
+  .goal-delete{background:none; border:none; color:var(--light-gray); font-size:14px; padding:2px 6px; line-height:1;}
+  .goal-bar-bg{background:var(--offwhite); border-radius:999px; height:10px; overflow:hidden;}
+  .goal-bar-fill{background:linear-gradient(90deg, var(--gold), var(--teal)); height:100%; border-radius:999px; transition:width .3s ease;}
+  .goal-sub{font-size:11.5px; color:var(--gray); margin-top:6px; font-weight:600;}
+  .goal-form input{margin-bottom:8px;}
+
+  table{width:100%; border-collapse:collapse; font-size:12.5px;}
+  th,td{padding:7px 6px; text-align:right; border-bottom:1px solid var(--border);}
+  th:first-child,td:first-child{text-align:left;}
+  th{color:var(--gray); font-size:10.5px; text-transform:uppercase; letter-spacing:.02em;}
+  td{color:var(--navy); font-weight:600;}
+  .table-wrap{overflow-x:auto; border-radius:10px;}
+
+  .section-title{font-size:13px; font-weight:700; color:var(--gray); text-transform:uppercase; letter-spacing:.03em; margin:18px 0 8px;}
+  .section-title:first-child{margin-top:0;}
+
+  .btn{
+    width:100%; padding:12px; border-radius:10px; border:none; font-size:14px; font-weight:700;
+    background:var(--navy); color:#fff; margin-top:6px;
+  }
+  .btn.secondary{background:#fff; color:var(--red); border:1.5px solid var(--red);}
+  .btn.small{width:auto; padding:8px 14px; font-size:12.5px;}
+
+  nav.tabbar{
+    position:fixed; bottom:0; left:0; right:0;
+    max-width:520px; margin:0 auto;
+    background:#fff; border-top:1px solid var(--border);
+    display:flex; z-index:30;
+    padding-bottom:env(safe-area-inset-bottom, 0);
+  }
+  nav.tabbar button{
+    flex:1; background:none; border:none; padding:12px 4px 10px; font-size:11.5px;
+    color:var(--light-gray); font-weight:600; display:flex; flex-direction:column; align-items:center; gap:3px;
+  }
+  nav.tabbar button .ic{font-size:19px; line-height:1;}
+  nav.tabbar button.active{color:var(--navy);}
+  nav.tabbar button.active .ic{color:var(--gold);}
+
+  .two-col{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .loading{padding:40px 20px; text-align:center; color:var(--gray); font-size:13px;}
+  .save-toast{
+    position:fixed; bottom:82px; left:50%; transform:translateX(-50%) translateY(20px);
+    background:var(--navy); color:#fff; padding:8px 16px; border-radius:999px; font-size:12px;
+    opacity:0; transition:opacity .2s, transform .2s; z-index:40; pointer-events:none;
+  }
+  .save-toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  #auth-screen{
+    display:none;
+    min-height:100vh;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+  }
+  .auth-card{
+    width:100%; max-width:360px;
+    background:#fff;
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:28px 24px;
+    text-align:center;
+  }
+  .auth-card h1{font-size:22px; color:var(--navy); margin-bottom:6px;}
+  .auth-card p{font-size:13px; color:var(--gray); margin:0 0 18px; line-height:1.4;}
+  .auth-card input{
+    width:100%; padding:12px 14px; margin-bottom:10px;
+    border:1px solid var(--border); border-radius:10px;
+    font-size:15px; font-family:inherit; color:var(--navy);
+  }
+  .auth-card .btn{width:100%; margin-top:4px;}
+  #auth-error{font-size:12.5px; color:var(--red); margin-top:10px; display:none;}
+  #auth-loading{font-size:12.5px; color:var(--light-gray); margin-top:10px;}
+</style>
+</head>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<body>
+<div id="auth-screen">
+  <div class="auth-card">
+    <h1>Mi Presupuesto</h1>
+    <p>Inicia sesión para guardar tus datos en la nube y verlos desde cualquier dispositivo.</p>
+    <input type="email" id="auth-email" placeholder="Correo electrónico" autocomplete="username">
+    <input type="password" id="auth-password" placeholder="Contraseña (mín. 6 caracteres)" autocomplete="current-password">
+    <button class="btn" id="auth-login">Entrar</button>
+    <button class="btn secondary" id="auth-signup">Crear cuenta nueva</button>
+    <p id="auth-error"></p>
+    <p id="auth-loading" style="display:none;">Conectando…</p>
+  </div>
+</div>
+<div id="app">
+  <header>
+    <h1>Mi Presupuesto</h1>
+    <p id="header-sub">Cargando…</p>
+  </header>
+  <main id="main"><div class="loading">Cargando tus datos…</div></main>
+  <nav class="tabbar">
+    <button data-tab="mensual" class="active"><span class="ic">📅</span>Mensual</button>
+    <button data-tab="resumen"><span class="ic">📊</span>Resumen</button>
+    <button data-tab="ajustes"><span class="ic">⚙️</span>Ajustes</button>
+  </nav>
+</div>
+<div class="save-toast" id="toast">Guardado</div>
+
+<script>
+const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
+// ---------- Firebase (login + guardado en la nube) ----------
+// Rellena esto con la configuración de TU proyecto de Firebase (Configuración del
+// proyecto → General → "Tus apps" → app web). Es gratis. Mientras esté sin rellenar,
+// la app sigue funcionando como antes, guardando solo en este navegador.
+const firebaseConfig = {
+  apiKey: "AIzaSyByqYF14EYTyjpng4hNtJfsVokcMUjaZaU",
+  authDomain: "presupuesto-8d7d9.firebaseapp.com",
+  projectId: "presupuesto-8d7d9",
+  storageBucket: "presupuesto-8d7d9.firebasestorage.app",
+  messagingSenderId: "619565526766",
+  appId: "1:619565526766:web:de629d1f7743c730540dff",
+};
+const FIREBASE_CONFIGURED = firebaseConfig.apiKey !== "TU_API_KEY";
+let auth = null, db = null, currentUser = null;
+if (FIREBASE_CONFIGURED) {
+  firebase.initializeApp(firebaseConfig);
+  auth = firebase.auth();
+  db = firebase.firestore();
+}
+
+function traducirErrorAuth(code) {
+  const map = {
+    "auth/invalid-email": "Ese correo no es válido.",
+    "auth/user-not-found": "No existe ninguna cuenta con ese correo.",
+    "auth/wrong-password": "Contraseña incorrecta.",
+    "auth/invalid-credential": "Correo o contraseña incorrectos.",
+    "auth/email-already-in-use": "Ya existe una cuenta con ese correo. Prueba a entrar en vez de crear una nueva.",
+    "auth/weak-password": "La contraseña necesita al menos 6 caracteres.",
+    "auth/missing-password": "Escribe una contraseña.",
+    "auth/too-many-requests": "Demasiados intentos. Espera un poco y vuelve a probar.",
+  };
+  return map[code] || "Ha ocurrido un error. Inténtalo de nuevo.";
+}
+
+function showAuthScreen() {
+  document.getElementById("auth-screen").style.display = "flex";
+  document.getElementById("app").style.display = "none";
+}
+function showApp() {
+  document.getElementById("auth-screen").style.display = "none";
+  document.getElementById("app").style.display = "flex";
+}
+
+function setupAuthHandlers() {
+  const emailEl = document.getElementById("auth-email");
+  const passEl = document.getElementById("auth-password");
+  const errEl = document.getElementById("auth-error");
+  const loadingEl = document.getElementById("auth-loading");
+
+  function setBusy(busy) {
+    loadingEl.style.display = busy ? "block" : "none";
+    document.getElementById("auth-login").disabled = busy;
+    document.getElementById("auth-signup").disabled = busy;
+  }
+  function showErr(code) {
+    errEl.textContent = traducirErrorAuth(code);
+    errEl.style.display = "block";
+  }
+
+  document.getElementById("auth-login").onclick = async () => {
+    errEl.style.display = "none";
+    setBusy(true);
+    try {
+      await auth.signInWithEmailAndPassword(emailEl.value.trim(), passEl.value);
+    } catch (e) { showErr(e.code); } finally { setBusy(false); }
+  };
+  document.getElementById("auth-signup").onclick = async () => {
+    errEl.style.display = "none";
+    setBusy(true);
+    try {
+      await auth.createUserWithEmailAndPassword(emailEl.value.trim(), passEl.value);
+    } catch (e) { showErr(e.code); } finally { setBusy(false); }
+  };
+}
+
+const DEFAULT_PARAMS = {
+  salarioBase: 1500,
+  alquiler: 300,
+  compra: 100,
+  gasolina: 100,
+  suscripciones: 32.95,
+  peluqueria: 10,
+  inversion: 500,
+  ahorroFijo: 100,
+  seguroCoche: 150,
+  rodaje: 60,
+  mesesSeguro: ["Abril","Mayo"],
+  mesRodaje: "Abril",
+  colchon: 10000,
+  saldoSantander: 0,
+  saldoTradeRepublic: 0,
+  googleSheetsUrl: "",
+  autoSyncSheets: false,
+};
+
+let params = { ...DEFAULT_PARAMS };
+let monthsData = MONTHS.map(m => ({ mes: m, salario: null, ajusteOcio: null, ajusteGasolina: null, ajusteCompra: null, ingresosExtra: null, gastoExcepcional: null, gastoExcepcionalNota: null }));
+let activeTab = "mensual";
+let activeMonthIdx = new Date().getMonth();
+let ready = false;
+let expandedFijos = false;
+let goals = [];
+let showAddGoalForm = false;
+
+const euro = (n) => {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  return n.toLocaleString("es-ES", { style: "currency", currency: "EUR", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+const euro0 = (n) => {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  return n.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
+};
+const pct = (n) => (n === null || n === undefined || isNaN(n)) ? "—" : (n * 100).toLocaleString("es-ES", { maximumFractionDigits: 1 }) + "%";
+
+// ---------- Storage ----------
+function hasClaudeStorage() {
+  return typeof window.storage !== "undefined" && window.storage && typeof window.storage.get === "function";
+}
+
+async function storageGet(key) {
+  if (FIREBASE_CONFIGURED && currentUser) {
+    try {
+      const doc = await db.collection("presupuestos").doc(currentUser.uid).get();
+      const data = doc.exists ? doc.data() : {};
+      return data[key] !== undefined ? data[key] : null;
+    } catch (e) { console.error("Error leyendo de Firestore", e); return null; }
+  }
+  if (hasClaudeStorage()) {
+    try {
+      const r = await window.storage.get(key, false);
+      return r && r.value ? r.value : null;
+    } catch (e) { return null; }
+  }
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+
+async function storageSet(key, value) {
+  if (FIREBASE_CONFIGURED && currentUser) {
+    try {
+      await db.collection("presupuestos").doc(currentUser.uid).set({ [key]: value }, { merge: true });
+      return true;
+    } catch (e) { console.error("Error guardando en Firestore", e); return false; }
+  }
+  if (hasClaudeStorage()) {
+    try { await window.storage.set(key, value, false); return true; }
+    catch (e) { console.error("Error guardando en Claude", e); return false; }
+  }
+  try { localStorage.setItem(key, value); return true; }
+  catch (e) { console.error("Error guardando en el navegador", e); return false; }
+}
+
+async function loadData() {
+  const p = await storageGet("finanzas_parametros");
+  if (p) { try { params = { ...DEFAULT_PARAMS, ...JSON.parse(p) }; } catch (e) {} }
+  const m = await storageGet("finanzas_meses");
+  if (m) { try { monthsData = JSON.parse(m); } catch (e) {} }
+  const g = await storageGet("finanzas_objetivos");
+  if (g) { try { goals = JSON.parse(g); } catch (e) {} }
+}
+
+let saveTimeout = null;
+async function saveParams() {
+  await storageSet("finanzas_parametros", JSON.stringify(params));
+  showToast();
+  if (params.autoSyncSheets) syncToSheets(false);
+}
+async function saveMonths() {
+  await storageSet("finanzas_meses", JSON.stringify(monthsData));
+  showToast();
+  if (params.autoSyncSheets) syncToSheets(false);
+}
+async function saveGoals() {
+  await storageSet("finanzas_objetivos", JSON.stringify(goals));
+  showToast();
+  if (params.autoSyncSheets) syncToSheets(false);
+}
+
+function buildSyncPayload() {
+  const meses = monthsData.map(m => {
+    const r = calcMonth(m);
+    return {
+      Mes: m.mes,
+      Salario: m.salario ?? "",
+      AjusteOcio: m.ajusteOcio ?? "",
+      AjusteGasolina: m.ajusteGasolina ?? "",
+      AjusteCompra: m.ajusteCompra ?? "",
+      IngresosExtra: m.ingresosExtra ?? "",
+      GastoExcepcional: m.gastoExcepcional ?? "",
+      ConceptoGastoExcepcional: m.gastoExcepcionalNota ?? "",
+      TotalSantander: r ? r.totalSantander : "",
+      TotalTradeRepublic: r ? r.totalTradeRepublic : "",
+      TotalING: r ? r.totalING : "",
+      Comprobacion: r ? r.comprobacion : "",
+    };
+  });
+  const parametros = { ...params };
+  delete parametros.googleSheetsUrl;
+  const objetivos = goals.map(g => ({ Nombre: g.nombre, Meta: g.meta }));
+  return { meses, parametros, objetivos, actualizado: new Date().toLocaleString("es-ES") };
+}
+
+async function syncToSheets(manual) {
+  const url = (params.googleSheetsUrl || "").trim();
+  if (!url) {
+    if (manual) alert("Primero pega la URL de tu Google Apps Script en Ajustes.");
+    return;
+  }
+  try {
+    await fetch(url, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(buildSyncPayload()),
+    });
+    if (manual) showToast();
+  } catch (e) {
+    console.error("Error sincronizando con Google Sheets", e);
+    if (manual) alert("No se ha podido conectar. Revisa la URL y tu conexión a internet.");
+  }
+}
+
+function exportBackup() {
+  try {
+    const wb = XLSX.utils.book_new();
+
+    // --- Hoja Meses ---
+    const mesesRows = monthsData.map(m => {
+      const r = calcMonth(m);
+      return {
+        "Mes": m.mes,
+        "Salario recibido": m.salario ?? "",
+        "Ajuste de ocio": m.ajusteOcio ?? "",
+        "Ajuste de gasolina": m.ajusteGasolina ?? "",
+        "Ajuste de compra": m.ajusteCompra ?? "",
+        "Ingresos extra": m.ingresosExtra ?? "",
+        "Gasto excepcional": m.gastoExcepcional ?? "",
+        "Concepto gasto excepcional": m.gastoExcepcionalNota ?? "",
+        "Total → Santander": r ? r.totalSantander : "",
+        "Total → Trade Republic": r ? r.totalTradeRepublic : "",
+        "Total → ING": r ? r.totalING : "",
+        "Comprobación": r ? r.comprobacion : "",
+      };
+    });
+    const wsMeses = XLSX.utils.json_to_sheet(mesesRows);
+    XLSX.utils.book_append_sheet(wb, wsMeses, "Meses");
+
+    // --- Hoja Parámetros ---
+    const paramRows = [
+      ["Salario base de referencia", params.salarioBase],
+      ["Alquiler", params.alquiler],
+      ["Compra (presupuesto medio)", params.compra],
+      ["Gasolina (presupuesto medio)", params.gasolina],
+      ["Suscripciones", params.suscripciones],
+      ["Peluquería", params.peluqueria],
+      ["Inversión automática", params.inversion],
+      ["Ahorro fijo", params.ahorroFijo],
+      ["Seguro del coche (importe)", params.seguroCoche],
+      ["Meses del seguro", params.mesesSeguro.join(" y ")],
+      ["Rodaje / ITV (importe)", params.rodaje],
+      ["Mes del rodaje", params.mesRodaje],
+      ["Colchón objetivo CAJA 7", params.colchon],
+      ["Saldo inicial Santander", params.saldoSantander],
+      ["Saldo inicial Trade Republic", params.saldoTradeRepublic],
+    ];
+    const wsParams = XLSX.utils.aoa_to_sheet([["Parámetro", "Valor"], ...paramRows]);
+    XLSX.utils.book_append_sheet(wb, wsParams, "Parámetros");
+
+    // --- Hoja Objetivos ---
+    const goalRows = goals.map(g => ({ "Nombre": g.nombre, "Meta (€)": g.meta }));
+    const wsGoals = XLSX.utils.json_to_sheet(goalRows.length ? goalRows : [{ "Nombre": "", "Meta (€)": "" }]);
+    XLSX.utils.book_append_sheet(wb, wsGoals, "Objetivos");
+
+    const fecha = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `Backup_Presupuesto_${fecha}.xlsx`);
+    showToast();
+  } catch (e) {
+    console.error("Error exportando backup", e);
+    alert("No se ha podido generar el Excel. Comprueba tu conexión e inténtalo de nuevo.");
+  }
+}
+function showToast() {
+  const t = document.getElementById("toast");
+  t.classList.add("show");
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.remove("show"), 1100);
+}
+
+// ---------- Cálculo por mes (misma lógica que la hoja de cálculo) ----------
+function calcMonth(mData) {
+  const salario = mData.salario;
+  if (salario === null || salario === undefined || salario === "") return null;
+
+  const fijosEsenciales = params.alquiler + params.compra + params.gasolina; // usa la gasolina presupuestada (referencia)
+  const subsPelu = params.suscripciones + params.peluqueria;
+  const inversion = params.inversion;
+  const ahorroFijo = params.ahorroFijo;
+
+  let ocasional = 0;
+  if (params.mesesSeguro.includes(mData.mes)) ocasional += params.seguroCoche;
+  if (params.mesRodaje === mData.mes) ocasional += params.rodaje;
+
+  const totalFijosOcasional = fijosEsenciales + subsPelu + inversion + ahorroFijo + ocasional;
+  const ocioPresupuestado = Math.min(salario, params.salarioBase) - totalFijosOcasional;
+  const extraSantander = Math.max(salario - params.salarioBase, 0);
+
+  const ajusteOcio = (mData.ajusteOcio === null || mData.ajusteOcio === undefined || mData.ajusteOcio === "") ? 0 : Number(mData.ajusteOcio);
+  const ocioRealGastado = ocioPresupuestado + ajusteOcio;
+
+  const ajusteGasolina = (mData.ajusteGasolina === null || mData.ajusteGasolina === undefined || mData.ajusteGasolina === "") ? 0 : Number(mData.ajusteGasolina);
+  const gastoRealGasolina = params.gasolina + ajusteGasolina;
+  const ajusteCompra = (mData.ajusteCompra === null || mData.ajusteCompra === undefined || mData.ajusteCompra === "") ? 0 : Number(mData.ajusteCompra);
+  const gastoRealCompra = params.compra + ajusteCompra;
+  const fijosEsencialesReal = params.alquiler + gastoRealCompra + gastoRealGasolina; // lo que de verdad sale por ING
+
+  const ajusteSantander = -ajusteOcio - ajusteGasolina - ajusteCompra;
+  const ingresosExtra = (mData.ingresosExtra === null || mData.ingresosExtra === undefined || mData.ingresosExtra === "") ? 0 : Number(mData.ingresosExtra);
+  const gastoExcepcional = (mData.gastoExcepcional === null || mData.gastoExcepcional === undefined || mData.gastoExcepcional === "") ? 0 : Number(mData.gastoExcepcional);
+
+  const totalSantander = ahorroFijo + extraSantander + ajusteSantander + ingresosExtra - gastoExcepcional;
+  const totalTradeRepublic = inversion;
+  const totalING = fijosEsencialesReal + subsPelu + ocasional + ocioRealGastado + gastoExcepcional;
+
+  const comprobacion = (salario + ingresosExtra) - (totalSantander + totalTradeRepublic + totalING);
+
+  return {
+    fijosEsenciales, fijosEsencialesReal, subsPelu, inversion, ahorroFijo, ocasional,
+    gastoRealGasolina, ajusteGasolina, gastoRealCompra, ajusteCompra, ingresosExtra, gastoExcepcional,
+    gastoExcepcionalNota: mData.gastoExcepcionalNota || "",
+    totalFijosOcasional, ocioPresupuestado, extraSantander, ajuste: ajusteOcio,
+    ocioRealGastado, ajusteSantander, totalSantander, totalTradeRepublic,
+    totalING, comprobacion,
+  };
+}
+
+// ---------- Render ----------
+function render() {
+  document.getElementById("header-sub").textContent =
+    activeTab === "mensual" ? "Introduce tu salario del mes" :
+    activeTab === "resumen" ? "Tu año de un vistazo" : "Parámetros de tu presupuesto";
+
+  document.querySelectorAll("nav.tabbar button").forEach(b => {
+    b.classList.toggle("active", b.dataset.tab === activeTab);
+  });
+
+  const main = document.getElementById("main");
+  if (activeTab === "mensual") main.innerHTML = renderMensual();
+  else if (activeTab === "resumen") main.innerHTML = renderResumen();
+  else main.innerHTML = renderAjustes();
+
+  attachHandlers();
+}
+
+function renderMensual() {
+  const pills = MONTHS.map((m, i) => {
+    const filled = monthsData[i].salario !== null && monthsData[i].salario !== undefined && monthsData[i].salario !== "";
+    const cls = ["month-pill"];
+    if (i === activeMonthIdx) cls.push("active");
+    else if (filled) cls.push("filled");
+    return `<button class="${cls.join(" ")}" data-month="${i}">${m.slice(0,3)}</button>`;
+  }).join("");
+
+  const mData = monthsData[activeMonthIdx];
+
+  return `
+    <div class="month-scroller">${pills}</div>
+    <div class="card">
+      <div class="field">
+        <label>Salario recibido en ${mData.mes}</label>
+        <input type="number" inputmode="decimal" step="0.01" id="input-salario" placeholder="Ej. 1500" value="${mData.salario ?? ""}">
+      </div>
+      <div class="field">
+        <label>Ajuste de ocio <span class="hint">Positivo si gastaste de más · negativo si te sobró</span></label>
+        <input type="number" inputmode="decimal" step="0.01" id="input-ajuste" placeholder="Ej. 50 o -30" value="${mData.ajusteOcio ?? ""}">
+      </div>
+      <div class="field">
+        <label>Ajuste de gasolina <span class="hint">Presupuesto medio 100 € · positivo si gastaste de más, negativo si gastaste menos</span></label>
+        <input type="number" inputmode="decimal" step="0.01" id="input-ajuste-gasolina" placeholder="Ej. -30 si gastaste 70" value="${mData.ajusteGasolina ?? ""}">
+      </div>
+      <div class="field">
+        <label>Ajuste de compra <span class="hint">Presupuesto medio 100 € · positivo si gastaste de más, negativo si gastaste menos</span></label>
+        <input type="number" inputmode="decimal" step="0.01" id="input-ajuste-compra" placeholder="Ej. -20 si gastaste 80" value="${mData.ajusteCompra ?? ""}">
+      </div>
+      <div class="field">
+        <label>Ingresos extra <span class="hint">Regalos u otros ingresos puntuales · va directo a Santander · 0 € por defecto</span></label>
+        <input type="number" inputmode="decimal" step="0.01" id="input-ingresos-extra" placeholder="0" value="${mData.ingresosExtra ?? ""}">
+      </div>
+      <div class="field">
+        <label>Gasto excepcional <span class="hint">Algo imprevisto (reparación, multa...) · resta de Santander este mes · 0 € por defecto</span></label>
+        <input type="number" inputmode="decimal" step="0.01" id="input-gasto-excepcional" placeholder="0" value="${mData.gastoExcepcional ?? ""}">
+      </div>
+      <div class="field" id="gasto-excepcional-nota-wrap" style="display:${(mData.gastoExcepcional && Number(mData.gastoExcepcional) !== 0) ? "block" : "none"};">
+        <label>¿En qué? <span class="hint">Un concepto breve para recordarlo luego</span></label>
+        <input type="text" id="input-gasto-excepcional-nota" placeholder="Ej. Médico, reparación coche..." value="${mData.gastoExcepcionalNota ?? ""}">
+      </div>
+    </div>
+    <div id="results-container">${computeResultsHtml(mData)}</div>
+  `;
+}
+
+function computeResultsHtml(mData) {
+  const r = calcMonth(mData);
+  if (!r) {
+    return `<div class="card"><p style="color:var(--gray); font-size:13px; margin:0;">Escribe el salario de ${mData.mes} para ver el reparto.</p></div>`;
+  }
+  const sanNeg = r.totalSantander < 0;
+  return `
+    <div class="card">
+      <h3>Desglose de ${mData.mes}</h3>
+      <div class="result-row expandable-head" id="toggle-fijos">
+        <span class="label">Gastos fijos esenciales <span class="arrow ${expandedFijos ? "open" : ""}">▶</span></span>
+        <span class="value">${euro(r.fijosEsencialesReal)}</span>
+      </div>
+      <div class="sub-rows ${expandedFijos ? "open" : ""}" id="subrows-fijos">
+        <div class="result-row sub"><span class="label">Alquiler</span><span class="value">${euro(params.alquiler)}</span></div>
+        <div class="result-row sub"><span class="label">Compra (real este mes)</span><span class="value">${euro(r.gastoRealCompra)}</span></div>
+        <div class="result-row sub"><span class="label">Gasolina (real este mes)</span><span class="value">${euro(r.gastoRealGasolina)}</span></div>
+      </div>
+      <div class="result-row"><span class="label">Suscripciones + peluquería</span><span class="value">${euro(r.subsPelu)}</span></div>
+      <div class="result-row"><span class="label">Inversión automática</span><span class="value">${euro(r.inversion)}</span></div>
+      <div class="result-row"><span class="label">Ahorro fijo</span><span class="value">${euro(r.ahorroFijo)}</span></div>
+      <div class="result-row"><span class="label">Gastos ocasionales coche</span><span class="value">${euro(r.ocasional)}</span></div>
+      <div class="result-row"><span class="label">Ocio presupuestado</span><span class="value">${euro(r.ocioPresupuestado)}</span></div>
+      <div class="result-row"><span class="label">Ocio real gastado</span><span class="value">${euro(r.ocioRealGastado)}</span></div>
+      <div class="result-row"><span class="label">Extra sobre salario base</span><span class="value">${euro(r.extraSantander)}</span></div>
+      <div class="result-row"><span class="label">Ingresos extra (regalos, etc.)</span><span class="value">${euro(r.ingresosExtra)}</span></div>
+      <div class="result-row"><span class="label">Gasto excepcional${r.gastoExcepcionalNota ? ` · ${escapeHtml(r.gastoExcepcionalNota)}` : ""}</span><span class="value">${euro(r.gastoExcepcional)}</span></div>
+    </div>
+    <div class="card">
+      <h3>Reparto de ${mData.mes}</h3>
+      <div class="dest-grid">
+        <div class="dest-card ing"><span class="name">ING · gastos diarios</span><span class="amount">${euro0(r.totalING)}</span></div>
+        <div class="dest-card tr"><span class="name">Trade Republic · inversión</span><span class="amount">${euro0(r.totalTradeRepublic)}</span></div>
+        <div class="dest-card san ${sanNeg ? "negative" : ""}"><span class="name">Santander · ahorro</span><span class="amount">${euro0(r.totalSantander)}</span></div>
+      </div>
+      ${sanNeg
+        ? `<div class="warn-banner">⚠️ Este mes el sobregasto de ocio, compra, gasolina y/o un gasto excepcional supera lo que ibas a meter en Santander. Tendrás que sacar dinero de lo ya ahorrado allí.</div>`
+        : `<div class="ok-banner">Comprobación: ${euro(r.comprobacion)} (debe ser 0 €)</div>`}
+    </div>
+  `;
+}
+
+function renderResumen() {
+  const filled = monthsData.map(calcMonth);
+  const sum = (fn) => filled.reduce((acc, r) => r ? acc + fn(r) : acc, 0);
+  const count = filled.filter(Boolean).length;
+
+  const salarioTotal = monthsData.reduce((acc, m) => acc + (m.salario ? Number(m.salario) : 0), 0);
+  const fijosTotal = sum(r => r.fijosEsencialesReal + r.subsPelu + r.inversion + r.ocasional);
+  const inversionTotal = sum(r => r.totalTradeRepublic);
+  const santanderTotal = sum(r => r.totalSantander);
+  const ingTotal = sum(r => r.totalING);
+  const ocioMedio = count ? sum(r => r.ocioPresupuestado) / count : 0;
+  const ratioFijos = salarioTotal ? fijosTotal / salarioTotal : 0;
+  const ratioInversion = salarioTotal ? inversionTotal / salarioTotal : 0;
+  const fijosEsencialesMes = params.alquiler + params.compra + params.gasolina;
+  const mesesColchon = fijosEsencialesMes ? params.colchon / fijosEsencialesMes : 0;
+
+  let rows = "";
+  let saldoSan = params.saldoSantander;
+  let saldoTR = params.saldoTradeRepublic;
+  MONTHS.forEach((m, i) => {
+    const r = filled[i];
+    if (r) { saldoSan += r.totalSantander; saldoTR += r.totalTradeRepublic; }
+    rows += `<tr><td>${m.slice(0,3)}</td><td>${r ? euro0(r.totalSantander) : "—"}</td><td>${euro0(saldoSan)}</td><td>${r ? euro0(saldoTR) : "—"}</td><td>${euro0(saldoTR)}</td></tr>`;
+  });
+
+  return `
+    <div class="section-title">KPIs del año${count < 12 ? ` (${count} de 12 meses)` : ""}</div>
+    <div class="kpi-grid">
+      <div class="kpi"><div class="big">${euro0(salarioTotal)}</div><div class="lbl">Salario total del año</div></div>
+      <div class="kpi"><div class="big">${pct(ratioInversion)}</div><div class="lbl">Tasa de inversión</div></div>
+      <div class="kpi"><div class="big">${pct(ratioFijos)}</div><div class="lbl">Fijos+inversión / ingresos</div></div>
+      <div class="kpi"><div class="big">${euro(ocioMedio)}</div><div class="lbl">Ocio presupuestado medio/mes</div></div>
+      <div class="kpi"><div class="big">${euro0(santanderTotal)}</div><div class="lbl">Enviado a Santander (año)</div></div>
+      <div class="kpi"><div class="big">${mesesColchon.toLocaleString("es-ES",{maximumFractionDigits:1})} meses</div><div class="lbl">Colchón CAJA 7 cubre</div></div>
+    </div>
+
+    <div class="section-title">Saldos acumulados</div>
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Mes</th><th>+Santander</th><th>Saldo San.</th><th>+Trade Rep.</th><th>Saldo TR</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+    <p style="font-size:11px; color:var(--light-gray); margin:0 0 10px;">Los saldos parten de lo que pongas en Ajustes como saldo inicial y no incluyen rentabilidad de las inversiones.</p>
+
+    <div class="section-title">Meses con sobregasto</div>
+    <div class="card">
+      ${renderOverspendList(filled)}
+    </div>
+
+    <div class="section-title">Objetivos en Santander</div>
+    <div class="card">
+      ${renderGoalsSection(saldoSan)}
+    </div>
+  `;
+}
+
+function renderOverspendList(filled) {
+  const items = [];
+  MONTHS.forEach((m, i) => {
+    const r = filled[i];
+    if (!r) return;
+    const ocioOver = r.ajuste > 0 ? r.ajuste : 0;
+    const gasOver = r.ajusteGasolina > 0 ? r.ajusteGasolina : 0;
+    const compraOver = r.ajusteCompra > 0 ? r.ajusteCompra : 0;
+    const excepcional = r.gastoExcepcional > 0 ? r.gastoExcepcional : 0;
+    if (ocioOver > 0 || gasOver > 0 || compraOver > 0 || excepcional > 0) items.push({ mes: m, ocioOver, gasOver, compraOver, excepcional, excepcionalNota: r.gastoExcepcionalNota });
+  });
+  if (items.length === 0) {
+    return `<p style="font-size:13px; color:var(--teal); margin:0; font-weight:600;">✅ Ningún mes con sobregasto todavía.</p>`;
+  }
+  return items.map(o => {
+    const parts = [];
+    if (o.ocioOver) parts.push(`Ocio +${euro(o.ocioOver)}`);
+    if (o.gasOver) parts.push(`Gasolina +${euro(o.gasOver)}`);
+    if (o.compraOver) parts.push(`Compra +${euro(o.compraOver)}`);
+    if (o.excepcional) parts.push(`Excepcional +${euro(o.excepcional)}${o.excepcionalNota ? ` (${escapeHtml(o.excepcionalNota)})` : ""}`);
+    const impacto = -(o.ocioOver + o.gasOver + o.compraOver + o.excepcional);
+    return `<div class="result-row"><span class="label">${o.mes}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400; margin-top:2px;">${parts.join(" · ")}</span></span><span class="value" style="color:var(--red)">${euro(impacto)}</span></div>`;
+  }).join("");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
+
+function renderGoalsSection(saldoActual) {
+  let remaining = saldoActual;
+  const cards = goals.map(g => {
+    const asignado = Math.max(0, Math.min(g.meta, remaining));
+    remaining -= asignado;
+    const pctVal = g.meta > 0 ? Math.min(100, (asignado / g.meta) * 100) : 0;
+    const done = g.meta > 0 && asignado >= g.meta;
+    return `
+      <div class="goal-card">
+        <div class="goal-head">
+          <span class="goal-name">${escapeHtml(g.nombre)}${done ? " ✅" : ""}</span>
+          <button class="goal-delete" data-goal="${g.id}" aria-label="Eliminar objetivo">✕</button>
+        </div>
+        <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:${pctVal}%"></div></div>
+        <div class="goal-sub">${euro0(asignado)} de ${euro0(g.meta)} · ${pctVal.toFixed(0)}%</div>
+      </div>
+    `;
+  }).join("");
+
+  const formOrButton = showAddGoalForm ? `
+    <div class="goal-form">
+      <input type="text" id="new-goal-name" placeholder="Nombre del objetivo (ej. PS5)">
+      <input type="number" step="0.01" id="new-goal-amount" placeholder="Importe objetivo (€)">
+      <div class="two-col" style="margin-top:8px;">
+        <button class="btn small" id="btn-save-goal">Guardar</button>
+        <button class="btn small secondary" id="btn-cancel-goal">Cancelar</button>
+      </div>
+    </div>
+  ` : `<button class="btn" id="btn-add-goal">+ Nuevo objetivo</button>`;
+
+  return `
+    <p style="font-size:11.5px; color:var(--light-gray); margin:0 0 12px;">Saldo actual en Santander: <strong style="color:var(--navy)">${euro0(saldoActual)}</strong>. Se reparte entre tus objetivos por orden de creación.</p>
+    ${goals.length ? cards : `<p style="font-size:13px; color:var(--gray); margin:0 0 10px;">Aún no tienes objetivos de ahorro.</p>`}
+    ${formOrButton}
+  `;
+}
+
+function renderAjustes() {
+  const p = params;
+  const monthOptions = (selected) => MONTHS.map(m => `<option value="${m}" ${m===selected?"selected":""}>${m}</option>`).join("");
+  const seguroMes1 = p.mesesSeguro[0] || "Abril";
+  const seguroMes2 = p.mesesSeguro[1] || "Mayo";
+  const storageMode = (FIREBASE_CONFIGURED && currentUser)
+    ? `<div class="ok-banner">☁️ Sesión iniciada como <strong>${escapeHtml(currentUser.email)}</strong> — tus datos se guardan en la nube y se ven igual en cualquier dispositivo. <button class="btn small secondary" id="btn-logout" style="width:auto; margin-top:8px;">Cerrar sesión</button></div>`
+    : hasClaudeStorage()
+    ? `<div class="ok-banner">☁️ Guardando en tu cuenta de Claude — debería verse igual en tus demás dispositivos dentro de la app.</div>`
+    : `<div class="warn-banner" style="background:#FFF6D9; color:#8A6D1D; border-color:#F0DFA0;">💾 Guardando solo en este navegador — no se comparte con otros dispositivos. Configura Google Sheets más abajo para tener un punto en común.</div>`;
+
+  return `
+    <div class="card" style="margin-bottom:14px;">${storageMode}</div>
+    <div class="section-title">Salario y saldos</div>
+    <div class="card">
+      <div class="field"><label>Salario base de referencia</label><input type="number" step="0.01" id="p-salarioBase" value="${p.salarioBase}"></div>
+      <div class="two-col">
+        <div class="field"><label>Saldo inicial Santander</label><input type="number" step="0.01" id="p-saldoSantander" value="${p.saldoSantander}"></div>
+        <div class="field"><label>Saldo inicial Trade Republic</label><input type="number" step="0.01" id="p-saldoTradeRepublic" value="${p.saldoTradeRepublic}"></div>
+      </div>
+      <div class="field"><label>Colchón objetivo CAJA 7</label><input type="number" step="0.01" id="p-colchon" value="${p.colchon}"></div>
+    </div>
+
+    <div class="section-title">Gastos fijos mensuales</div>
+    <div class="card">
+      <div class="two-col">
+        <div class="field"><label>Alquiler</label><input type="number" step="0.01" id="p-alquiler" value="${p.alquiler}"></div>
+        <div class="field"><label>Compra <span class="hint">Presupuesto medio; ajústalo cada mes en la pestaña Mensual</span></label><input type="number" step="0.01" id="p-compra" value="${p.compra}"></div>
+      </div>
+      <div class="two-col">
+        <div class="field"><label>Gasolina <span class="hint">Presupuesto medio; ajústalo cada mes en la pestaña Mensual</span></label><input type="number" step="0.01" id="p-gasolina" value="${p.gasolina}"></div>
+        <div class="field"><label>Suscripciones</label><input type="number" step="0.01" id="p-suscripciones" value="${p.suscripciones}"></div>
+      </div>
+      <div class="two-col">
+        <div class="field"><label>Peluquería</label><input type="number" step="0.01" id="p-peluqueria" value="${p.peluqueria}"></div>
+        <div class="field"><label>Inversión automática</label><input type="number" step="0.01" id="p-inversion" value="${p.inversion}"></div>
+      </div>
+      <div class="field"><label>Ahorro fijo (Santander)</label><input type="number" step="0.01" id="p-ahorroFijo" value="${p.ahorroFijo}"></div>
+    </div>
+
+    <div class="section-title">Gastos ocasionales del coche</div>
+    <div class="card">
+      <div class="two-col">
+        <div class="field"><label>Seguro del coche (importe)</label><input type="number" step="0.01" id="p-seguroCoche" value="${p.seguroCoche}"></div>
+        <div class="field"><label>Rodaje / ITV (importe)</label><input type="number" step="0.01" id="p-rodaje" value="${p.rodaje}"></div>
+      </div>
+      <div class="two-col">
+        <div class="field"><label>Mes 1 del seguro</label><select id="p-mesSeguro1">${monthOptions(seguroMes1)}</select></div>
+        <div class="field"><label>Mes 2 del seguro</label><select id="p-mesSeguro2">${monthOptions(seguroMes2)}</select></div>
+      </div>
+      <div class="field"><label>Mes del rodaje / ITV</label><select id="p-mesRodaje">${monthOptions(p.mesRodaje)}</select></div>
+    </div>
+
+    <div class="section-title">Google Sheets</div>
+    <div class="card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Pega aquí la URL de tu Google Apps Script (te explico cómo crearla) para volcar tus datos a un Google Sheet propio.</p>
+      <div class="field">
+        <label>URL de Apps Script</label>
+        <input type="text" id="p-sheetsUrl" placeholder="https://script.google.com/macros/s/.../exec" value="${p.googleSheetsUrl || ""}">
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--navy); font-weight:600; margin:6px 0 12px;">
+        <input type="checkbox" id="p-autoSync" ${p.autoSyncSheets ? "checked" : ""} style="width:18px;height:18px;">
+        Sincronizar automáticamente cada vez que guarde algo
+      </label>
+      <button class="btn" id="btn-sync-sheets">🔄 Sincronizar ahora</button>
+      <p style="font-size:11px; color:var(--light-gray); margin:10px 0 0;">Como el navegador no puede confirmar que Google lo recibió, si algo falla revisa la URL o vuelve a desplegar el script.</p>
+    </div>
+
+    <div class="section-title">Copia de seguridad</div>
+    <div class="card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 12px;">Descarga un Excel con todos tus datos tal y como están ahora mismo (meses, parámetros y objetivos). No hay backup automático real: los navegadores no permiten guardar en tus archivos sin que tú lo pidas, así que descárgalo cuando quieras tener una copia al día.</p>
+      <button class="btn" id="btn-export">⬇️ Descargar copia de seguridad (Excel)</button>
+    </div>
+
+    <button class="btn secondary" id="btn-reset">Borrar todos mis datos</button>
+  `;
+}
+
+// ---------- Handlers ----------
+function attachHandlers() {
+  document.querySelectorAll(".month-pill").forEach(btn => {
+    btn.onclick = () => { activeMonthIdx = Number(btn.dataset.month); render(); };
+  });
+
+  const salarioInput = document.getElementById("input-salario");
+  if (salarioInput) {
+    salarioInput.oninput = () => {
+      const v = salarioInput.value;
+      monthsData[activeMonthIdx].salario = v === "" ? null : Number(v);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      attachResultHandlers();
+    };
+    salarioInput.onchange = () => { saveMonths(); updatePillState(); };
+  }
+  const ajusteInput = document.getElementById("input-ajuste");
+  if (ajusteInput) {
+    ajusteInput.oninput = () => {
+      const v = ajusteInput.value;
+      monthsData[activeMonthIdx].ajusteOcio = v === "" ? null : Number(v);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      attachResultHandlers();
+    };
+    ajusteInput.onchange = saveMonths;
+  }
+  const ajusteGasolinaInput = document.getElementById("input-ajuste-gasolina");
+  if (ajusteGasolinaInput) {
+    ajusteGasolinaInput.oninput = () => {
+      const v = ajusteGasolinaInput.value;
+      monthsData[activeMonthIdx].ajusteGasolina = v === "" ? null : Number(v);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      attachResultHandlers();
+    };
+    ajusteGasolinaInput.onchange = saveMonths;
+  }
+  const ajusteCompraInput = document.getElementById("input-ajuste-compra");
+  if (ajusteCompraInput) {
+    ajusteCompraInput.oninput = () => {
+      const v = ajusteCompraInput.value;
+      monthsData[activeMonthIdx].ajusteCompra = v === "" ? null : Number(v);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      attachResultHandlers();
+    };
+    ajusteCompraInput.onchange = saveMonths;
+  }
+  const ingresosExtraInput = document.getElementById("input-ingresos-extra");
+  if (ingresosExtraInput) {
+    ingresosExtraInput.oninput = () => {
+      const v = ingresosExtraInput.value;
+      monthsData[activeMonthIdx].ingresosExtra = v === "" ? null : Number(v);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      attachResultHandlers();
+    };
+    ingresosExtraInput.onchange = saveMonths;
+  }
+  const gastoExcepcionalInput = document.getElementById("input-gasto-excepcional");
+  if (gastoExcepcionalInput) {
+    gastoExcepcionalInput.oninput = () => {
+      const v = gastoExcepcionalInput.value;
+      monthsData[activeMonthIdx].gastoExcepcional = v === "" ? null : Number(v);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      attachResultHandlers();
+      const notaWrap = document.getElementById("gasto-excepcional-nota-wrap");
+      if (notaWrap) notaWrap.style.display = (v !== "" && Number(v) !== 0) ? "block" : "none";
+    };
+    gastoExcepcionalInput.onchange = saveMonths;
+  }
+  const gastoExcepcionalNotaInput = document.getElementById("input-gasto-excepcional-nota");
+  if (gastoExcepcionalNotaInput) {
+    gastoExcepcionalNotaInput.oninput = () => {
+      monthsData[activeMonthIdx].gastoExcepcionalNota = gastoExcepcionalNotaInput.value;
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      attachResultHandlers();
+    };
+    gastoExcepcionalNotaInput.onchange = saveMonths;
+  }
+  attachResultHandlers();
+
+  const addGoalBtn = document.getElementById("btn-add-goal");
+  if (addGoalBtn) addGoalBtn.onclick = () => { showAddGoalForm = true; render(); };
+  const cancelGoalBtn = document.getElementById("btn-cancel-goal");
+  if (cancelGoalBtn) cancelGoalBtn.onclick = () => { showAddGoalForm = false; render(); };
+  const saveGoalBtn = document.getElementById("btn-save-goal");
+  if (saveGoalBtn) saveGoalBtn.onclick = () => {
+    const nameEl = document.getElementById("new-goal-name");
+    const amtEl = document.getElementById("new-goal-amount");
+    const nombre = nameEl.value.trim();
+    const meta = Number(amtEl.value);
+    if (!nombre || !meta || meta <= 0) { alert("Escribe un nombre y un importe objetivo válido."); return; }
+    goals.push({ id: Date.now(), nombre, meta });
+    showAddGoalForm = false;
+    saveGoals();
+    render();
+  };
+  document.querySelectorAll(".goal-delete").forEach(btn => {
+    btn.onclick = () => {
+      const id = Number(btn.dataset.goal);
+      goals = goals.filter(g => g.id !== id);
+      saveGoals();
+      render();
+    };
+  });
+
+  const paramFieldMap = {
+    "p-salarioBase":"salarioBase","p-saldoSantander":"saldoSantander","p-saldoTradeRepublic":"saldoTradeRepublic",
+    "p-colchon":"colchon","p-alquiler":"alquiler","p-compra":"compra","p-gasolina":"gasolina",
+    "p-suscripciones":"suscripciones","p-peluqueria":"peluqueria","p-inversion":"inversion",
+    "p-ahorroFijo":"ahorroFijo","p-seguroCoche":"seguroCoche","p-rodaje":"rodaje",
+  };
+  Object.entries(paramFieldMap).forEach(([id, key]) => {
+    const el = document.getElementById(id);
+    if (el) el.onchange = () => { params[key] = Number(el.value) || 0; saveParams(); };
+  });
+
+  const ms1 = document.getElementById("p-mesSeguro1");
+  const ms2 = document.getElementById("p-mesSeguro2");
+  const mr = document.getElementById("p-mesRodaje");
+  if (ms1) ms1.onchange = () => { params.mesesSeguro = [ms1.value, ms2.value]; saveParams(); };
+  if (ms2) ms2.onchange = () => { params.mesesSeguro = [ms1.value, ms2.value]; saveParams(); };
+  if (mr) mr.onchange = () => { params.mesRodaje = mr.value; saveParams(); };
+
+  const exportBtn = document.getElementById("btn-export");
+  if (exportBtn) exportBtn.onclick = exportBackup;
+
+  const sheetsUrlInput = document.getElementById("p-sheetsUrl");
+  if (sheetsUrlInput) sheetsUrlInput.onchange = () => { params.googleSheetsUrl = sheetsUrlInput.value.trim(); saveParams(); };
+  const autoSyncInput = document.getElementById("p-autoSync");
+  if (autoSyncInput) autoSyncInput.onchange = () => { params.autoSyncSheets = autoSyncInput.checked; saveParams(); };
+  const syncBtn = document.getElementById("btn-sync-sheets");
+  if (syncBtn) syncBtn.onclick = () => syncToSheets(true);
+
+  const logoutBtn = document.getElementById("btn-logout");
+  if (logoutBtn) logoutBtn.onclick = () => { if (auth) auth.signOut(); };
+
+  const resetBtn = document.getElementById("btn-reset");
+  if (resetBtn) resetBtn.onclick = async () => {
+    if (!confirm("¿Seguro que quieres borrar todos tus datos guardados? Esta acción no se puede deshacer.")) return;
+    params = { ...DEFAULT_PARAMS };
+    monthsData = MONTHS.map(m => ({ mes: m, salario: null, ajusteOcio: null, ajusteGasolina: null, ajusteCompra: null, ingresosExtra: null, gastoExcepcional: null, gastoExcepcionalNota: null }));
+    goals = [];
+    await saveParams();
+    await saveMonths();
+    await saveGoals();
+    render();
+  };
+}
+
+function attachResultHandlers() {
+  const toggle = document.getElementById("toggle-fijos");
+  if (toggle) {
+    toggle.onclick = () => {
+      expandedFijos = !expandedFijos;
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      attachResultHandlers();
+    };
+  }
+}
+
+function updatePillState() {
+  document.querySelectorAll(".month-pill").forEach((btn, i) => {
+    if (i === activeMonthIdx) return;
+    const filled = monthsData[i].salario !== null && monthsData[i].salario !== undefined && monthsData[i].salario !== "";
+    btn.classList.toggle("filled", filled);
+  });
+}
+
+// ---------- Tabs ----------
+document.querySelectorAll("nav.tabbar button").forEach(btn => {
+  btn.addEventListener("click", () => { activeTab = btn.dataset.tab; render(); });
+});
+
+// ---------- Init ----------
+(async function init() {
+  if (FIREBASE_CONFIGURED) {
+    setupAuthHandlers();
+    showAuthScreen();
+    auth.onAuthStateChanged(async (user) => {
+      if (user) {
+        currentUser = user;
+        showApp();
+        await loadData();
+        ready = true;
+        render();
+      } else {
+        currentUser = null;
+        ready = false;
+        showAuthScreen();
+      }
+    });
+  } else {
+    await loadData();
+    ready = true;
+    render();
+  }
+})();
+</script>
+</body>
+</html>
