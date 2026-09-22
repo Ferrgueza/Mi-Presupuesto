@@ -2,12 +2,18 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#1E2761">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
 <title>Mi Presupuesto</title>
+
+<!-- PWA: hace que la app se pueda "instalar" y se abra sin barra de navegador -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1E2761">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Presupuesto">
 <style>
   :root{
     --navy:#1E2761;
@@ -38,12 +44,12 @@
     background:var(--offwhite);
     display:flex;
     flex-direction:column;
-    padding-bottom:76px;
+    padding-bottom:calc(76px + env(safe-area-inset-bottom, 0px));
   }
   header{
     background:var(--navy);
     color:#fff;
-    padding:22px 20px 18px;
+    padding:calc(22px + env(safe-area-inset-top, 0px)) 20px 18px;
     position:sticky;
     top:0;
     z-index:20;
@@ -195,51 +201,10 @@
     opacity:0; transition:opacity .2s, transform .2s; z-index:40; pointer-events:none;
   }
   .save-toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
-
-  #auth-screen{
-    display:none;
-    min-height:100vh;
-    align-items:center;
-    justify-content:center;
-    padding:20px;
-  }
-  .auth-card{
-    width:100%; max-width:360px;
-    background:#fff;
-    border:1px solid var(--border);
-    border-radius:16px;
-    padding:28px 24px;
-    text-align:center;
-  }
-  .auth-card h1{font-size:22px; color:var(--navy); margin-bottom:6px;}
-  .auth-card p{font-size:13px; color:var(--gray); margin:0 0 18px; line-height:1.4;}
-  .auth-card input{
-    width:100%; padding:12px 14px; margin-bottom:10px;
-    border:1px solid var(--border); border-radius:10px;
-    font-size:15px; font-family:inherit; color:var(--navy);
-  }
-  .auth-card .btn{width:100%; margin-top:4px;}
-  #auth-error{font-size:12.5px; color:var(--red); margin-top:10px; display:none;}
-  #auth-loading{font-size:12.5px; color:var(--light-gray); margin-top:10px;}
 </style>
 </head>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <body>
-<div id="auth-screen">
-  <div class="auth-card">
-    <h1>Mi Presupuesto</h1>
-    <p>Inicia sesión para guardar tus datos en la nube y verlos desde cualquier dispositivo.</p>
-    <input type="email" id="auth-email" placeholder="Correo electrónico" autocomplete="username">
-    <input type="password" id="auth-password" placeholder="Contraseña (mín. 6 caracteres)" autocomplete="current-password">
-    <button class="btn" id="auth-login">Entrar</button>
-    <button class="btn secondary" id="auth-signup">Crear cuenta nueva</button>
-    <p id="auth-error"></p>
-    <p id="auth-loading" style="display:none;">Conectando…</p>
-  </div>
-</div>
 <div id="app">
   <header>
     <h1>Mi Presupuesto</h1>
@@ -256,81 +221,6 @@
 
 <script>
 const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-
-// ---------- Firebase (login + guardado en la nube) ----------
-// Rellena esto con la configuración de TU proyecto de Firebase (Configuración del
-// proyecto → General → "Tus apps" → app web). Es gratis. Mientras esté sin rellenar,
-// la app sigue funcionando como antes, guardando solo en este navegador.
-const firebaseConfig = {
-  apiKey: "AIzaSyByqYF14EYTyjpng4hNtJfsVokcMUjaZaU",
-  authDomain: "presupuesto-8d7d9.firebaseapp.com",
-  projectId: "presupuesto-8d7d9",
-  storageBucket: "presupuesto-8d7d9.firebasestorage.app",
-  messagingSenderId: "619565526766",
-  appId: "1:619565526766:web:de629d1f7743c730540dff",
-};
-const FIREBASE_CONFIGURED = firebaseConfig.apiKey !== "TU_API_KEY";
-let auth = null, db = null, currentUser = null;
-if (FIREBASE_CONFIGURED) {
-  firebase.initializeApp(firebaseConfig);
-  auth = firebase.auth();
-  db = firebase.firestore();
-}
-
-function traducirErrorAuth(code) {
-  const map = {
-    "auth/invalid-email": "Ese correo no es válido.",
-    "auth/user-not-found": "No existe ninguna cuenta con ese correo.",
-    "auth/wrong-password": "Contraseña incorrecta.",
-    "auth/invalid-credential": "Correo o contraseña incorrectos.",
-    "auth/email-already-in-use": "Ya existe una cuenta con ese correo. Prueba a entrar en vez de crear una nueva.",
-    "auth/weak-password": "La contraseña necesita al menos 6 caracteres.",
-    "auth/missing-password": "Escribe una contraseña.",
-    "auth/too-many-requests": "Demasiados intentos. Espera un poco y vuelve a probar.",
-  };
-  return map[code] || "Ha ocurrido un error. Inténtalo de nuevo.";
-}
-
-function showAuthScreen() {
-  document.getElementById("auth-screen").style.display = "flex";
-  document.getElementById("app").style.display = "none";
-}
-function showApp() {
-  document.getElementById("auth-screen").style.display = "none";
-  document.getElementById("app").style.display = "flex";
-}
-
-function setupAuthHandlers() {
-  const emailEl = document.getElementById("auth-email");
-  const passEl = document.getElementById("auth-password");
-  const errEl = document.getElementById("auth-error");
-  const loadingEl = document.getElementById("auth-loading");
-
-  function setBusy(busy) {
-    loadingEl.style.display = busy ? "block" : "none";
-    document.getElementById("auth-login").disabled = busy;
-    document.getElementById("auth-signup").disabled = busy;
-  }
-  function showErr(code) {
-    errEl.textContent = traducirErrorAuth(code);
-    errEl.style.display = "block";
-  }
-
-  document.getElementById("auth-login").onclick = async () => {
-    errEl.style.display = "none";
-    setBusy(true);
-    try {
-      await auth.signInWithEmailAndPassword(emailEl.value.trim(), passEl.value);
-    } catch (e) { showErr(e.code); } finally { setBusy(false); }
-  };
-  document.getElementById("auth-signup").onclick = async () => {
-    errEl.style.display = "none";
-    setBusy(true);
-    try {
-      await auth.createUserWithEmailAndPassword(emailEl.value.trim(), passEl.value);
-    } catch (e) { showErr(e.code); } finally { setBusy(false); }
-  };
-}
 
 const DEFAULT_PARAMS = {
   salarioBase: 1500,
@@ -377,13 +267,6 @@ function hasClaudeStorage() {
 }
 
 async function storageGet(key) {
-  if (FIREBASE_CONFIGURED && currentUser) {
-    try {
-      const doc = await db.collection("presupuestos").doc(currentUser.uid).get();
-      const data = doc.exists ? doc.data() : {};
-      return data[key] !== undefined ? data[key] : null;
-    } catch (e) { console.error("Error leyendo de Firestore", e); return null; }
-  }
   if (hasClaudeStorage()) {
     try {
       const r = await window.storage.get(key, false);
@@ -394,12 +277,6 @@ async function storageGet(key) {
 }
 
 async function storageSet(key, value) {
-  if (FIREBASE_CONFIGURED && currentUser) {
-    try {
-      await db.collection("presupuestos").doc(currentUser.uid).set({ [key]: value }, { merge: true });
-      return true;
-    } catch (e) { console.error("Error guardando en Firestore", e); return false; }
-  }
   if (hasClaudeStorage()) {
     try { await window.storage.set(key, value, false); return true; }
     catch (e) { console.error("Error guardando en Claude", e); return false; }
@@ -828,9 +705,7 @@ function renderAjustes() {
   const monthOptions = (selected) => MONTHS.map(m => `<option value="${m}" ${m===selected?"selected":""}>${m}</option>`).join("");
   const seguroMes1 = p.mesesSeguro[0] || "Abril";
   const seguroMes2 = p.mesesSeguro[1] || "Mayo";
-  const storageMode = (FIREBASE_CONFIGURED && currentUser)
-    ? `<div class="ok-banner">☁️ Sesión iniciada como <strong>${escapeHtml(currentUser.email)}</strong> — tus datos se guardan en la nube y se ven igual en cualquier dispositivo. <button class="btn small secondary" id="btn-logout" style="width:auto; margin-top:8px;">Cerrar sesión</button></div>`
-    : hasClaudeStorage()
+  const storageMode = hasClaudeStorage()
     ? `<div class="ok-banner">☁️ Guardando en tu cuenta de Claude — debería verse igual en tus demás dispositivos dentro de la app.</div>`
     : `<div class="warn-banner" style="background:#FFF6D9; color:#8A6D1D; border-color:#F0DFA0;">💾 Guardando solo en este navegador — no se comparte con otros dispositivos. Configura Google Sheets más abajo para tener un punto en común.</div>`;
 
@@ -1033,9 +908,6 @@ function attachHandlers() {
   const syncBtn = document.getElementById("btn-sync-sheets");
   if (syncBtn) syncBtn.onclick = () => syncToSheets(true);
 
-  const logoutBtn = document.getElementById("btn-logout");
-  if (logoutBtn) logoutBtn.onclick = () => { if (auth) auth.signOut(); };
-
   const resetBtn = document.getElementById("btn-reset");
   if (resetBtn) resetBtn.onclick = async () => {
     if (!confirm("¿Seguro que quieres borrar todos tus datos guardados? Esta acción no se puede deshacer.")) return;
@@ -1075,28 +947,17 @@ document.querySelectorAll("nav.tabbar button").forEach(btn => {
 
 // ---------- Init ----------
 (async function init() {
-  if (FIREBASE_CONFIGURED) {
-    setupAuthHandlers();
-    showAuthScreen();
-    auth.onAuthStateChanged(async (user) => {
-      if (user) {
-        currentUser = user;
-        showApp();
-        await loadData();
-        ready = true;
-        render();
-      } else {
-        currentUser = null;
-        ready = false;
-        showAuthScreen();
-      }
-    });
-  } else {
-    await loadData();
-    ready = true;
-    render();
-  }
+  await loadData();
+  ready = true;
+  render();
 })();
+
+// ---------- PWA: registra el service worker si el navegador lo soporta ----------
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch((e) => console.error("SW error:", e));
+  });
+}
 </script>
 </body>
 </html>
