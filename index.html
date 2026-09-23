@@ -2,17 +2,16 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1E2761">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
 <title>Mi Presupuesto</title>
-
-<!-- PWA: hace que la app se pueda "instalar" y se abra sin barra de navegador -->
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#1E2761">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Presupuesto">
 <style>
   :root{
@@ -44,12 +43,12 @@
     background:var(--offwhite);
     display:flex;
     flex-direction:column;
-    padding-bottom:calc(76px + env(safe-area-inset-bottom, 0px));
+    padding-bottom:76px;
   }
   header{
     background:var(--navy);
     color:#fff;
-    padding:calc(22px + env(safe-area-inset-top, 0px)) 20px 18px;
+    padding:22px 20px 18px;
     position:sticky;
     top:0;
     z-index:20;
@@ -201,10 +200,51 @@
     opacity:0; transition:opacity .2s, transform .2s; z-index:40; pointer-events:none;
   }
   .save-toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  #auth-screen{
+    display:none;
+    min-height:100vh;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+  }
+  .auth-card{
+    width:100%; max-width:360px;
+    background:#fff;
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:28px 24px;
+    text-align:center;
+  }
+  .auth-card h1{font-size:22px; color:var(--navy); margin-bottom:6px;}
+  .auth-card p{font-size:13px; color:var(--gray); margin:0 0 18px; line-height:1.4;}
+  .auth-card input{
+    width:100%; padding:12px 14px; margin-bottom:10px;
+    border:1px solid var(--border); border-radius:10px;
+    font-size:15px; font-family:inherit; color:var(--navy);
+  }
+  .auth-card .btn{width:100%; margin-top:4px;}
+  #auth-error{font-size:12.5px; color:var(--red); margin-top:10px; display:none;}
+  #auth-loading{font-size:12.5px; color:var(--light-gray); margin-top:10px;}
 </style>
 </head>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <body>
+<div id="auth-screen">
+  <div class="auth-card">
+    <h1>Mi Presupuesto</h1>
+    <p>Inicia sesión para guardar tus datos en la nube y verlos desde cualquier dispositivo.</p>
+    <input type="email" id="auth-email" placeholder="Correo electrónico" autocomplete="username">
+    <input type="password" id="auth-password" placeholder="Contraseña (mín. 6 caracteres)" autocomplete="current-password">
+    <button class="btn" id="auth-login">Entrar</button>
+    <button class="btn secondary" id="auth-signup">Crear cuenta nueva</button>
+    <p id="auth-error"></p>
+    <p id="auth-loading" style="display:none;">Conectando…</p>
+  </div>
+</div>
 <div id="app">
   <header>
     <h1>Mi Presupuesto</h1>
@@ -221,6 +261,81 @@
 
 <script>
 const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
+// ---------- Firebase (login + guardado en la nube) ----------
+// Rellena esto con la configuración de TU proyecto de Firebase (Configuración del
+// proyecto → General → "Tus apps" → app web). Es gratis. Mientras esté sin rellenar,
+// la app sigue funcionando como antes, guardando solo en este navegador.
+const firebaseConfig = {
+  apiKey: "AIzaSyByqYF14EYTyjpng4hNtJfsVokcMUjaZaU",
+  authDomain: "presupuesto-8d7d9.firebaseapp.com",
+  projectId: "presupuesto-8d7d9",
+  storageBucket: "presupuesto-8d7d9.firebasestorage.app",
+  messagingSenderId: "619565526766",
+  appId: "1:619565526766:web:de629d1f7743c730540dff",
+};
+const FIREBASE_CONFIGURED = firebaseConfig.apiKey !== "TU_API_KEY";
+let auth = null, db = null, currentUser = null;
+if (FIREBASE_CONFIGURED) {
+  firebase.initializeApp(firebaseConfig);
+  auth = firebase.auth();
+  db = firebase.firestore();
+}
+
+function traducirErrorAuth(code) {
+  const map = {
+    "auth/invalid-email": "Ese correo no es válido.",
+    "auth/user-not-found": "No existe ninguna cuenta con ese correo.",
+    "auth/wrong-password": "Contraseña incorrecta.",
+    "auth/invalid-credential": "Correo o contraseña incorrectos.",
+    "auth/email-already-in-use": "Ya existe una cuenta con ese correo. Prueba a entrar en vez de crear una nueva.",
+    "auth/weak-password": "La contraseña necesita al menos 6 caracteres.",
+    "auth/missing-password": "Escribe una contraseña.",
+    "auth/too-many-requests": "Demasiados intentos. Espera un poco y vuelve a probar.",
+  };
+  return map[code] || "Ha ocurrido un error. Inténtalo de nuevo.";
+}
+
+function showAuthScreen() {
+  document.getElementById("auth-screen").style.display = "flex";
+  document.getElementById("app").style.display = "none";
+}
+function showApp() {
+  document.getElementById("auth-screen").style.display = "none";
+  document.getElementById("app").style.display = "flex";
+}
+
+function setupAuthHandlers() {
+  const emailEl = document.getElementById("auth-email");
+  const passEl = document.getElementById("auth-password");
+  const errEl = document.getElementById("auth-error");
+  const loadingEl = document.getElementById("auth-loading");
+
+  function setBusy(busy) {
+    loadingEl.style.display = busy ? "block" : "none";
+    document.getElementById("auth-login").disabled = busy;
+    document.getElementById("auth-signup").disabled = busy;
+  }
+  function showErr(code) {
+    errEl.textContent = traducirErrorAuth(code);
+    errEl.style.display = "block";
+  }
+
+  document.getElementById("auth-login").onclick = async () => {
+    errEl.style.display = "none";
+    setBusy(true);
+    try {
+      await auth.signInWithEmailAndPassword(emailEl.value.trim(), passEl.value);
+    } catch (e) { showErr(e.code); } finally { setBusy(false); }
+  };
+  document.getElementById("auth-signup").onclick = async () => {
+    errEl.style.display = "none";
+    setBusy(true);
+    try {
+      await auth.createUserWithEmailAndPassword(emailEl.value.trim(), passEl.value);
+    } catch (e) { showErr(e.code); } finally { setBusy(false); }
+  };
+}
 
 const DEFAULT_PARAMS = {
   salarioBase: 1500,
@@ -240,7 +355,29 @@ const DEFAULT_PARAMS = {
   saldoTradeRepublic: 0,
   googleSheetsUrl: "",
   autoSyncSheets: false,
+  extras: [],       // gastos fijos personalizados: [{id, nombre, importe}]
+  tema: "navy",      // tema de color elegido
 };
+
+const THEMES = {
+  navy:    { nombre: "Clásico",  navy: "#1E2761", navyDark: "#141A47", teal: "#1C9C8F", gold: "#E3A831", ice: "#CADCFC" },
+  bosque:  { nombre: "Bosque",   navy: "#1B4332", navyDark: "#0F2A20", teal: "#40916C", gold: "#D4A24C", ice: "#D8F3DC" },
+  burdeos: { nombre: "Burdeos",  navy: "#5C1A2B", navyDark: "#3D0F1C", teal: "#B5654A", gold: "#D9A441", ice: "#F3D9DF" },
+  lavanda: { nombre: "Lavanda",  navy: "#3B2E58", navyDark: "#26203B", teal: "#8E7CC3", gold: "#E0A96D", ice: "#E6DEF5" },
+  oceano:  { nombre: "Océano",   navy: "#0B3D5C", navyDark: "#072940", teal: "#2E9CCA", gold: "#E8B84B", ice: "#CFEAF7" },
+};
+
+function applyTheme(temaId) {
+  const t = THEMES[temaId] || THEMES.navy;
+  const root = document.documentElement.style;
+  root.setProperty("--navy", t.navy);
+  root.setProperty("--navy-dark", t.navyDark);
+  root.setProperty("--teal", t.teal);
+  root.setProperty("--gold", t.gold);
+  root.setProperty("--ice", t.ice);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", t.navy);
+}
 
 let params = { ...DEFAULT_PARAMS };
 let monthsData = MONTHS.map(m => ({ mes: m, salario: null, ajusteOcio: null, ajusteGasolina: null, ajusteCompra: null, ingresosExtra: null, gastoExcepcional: null, gastoExcepcionalNota: null }));
@@ -248,6 +385,7 @@ let activeTab = "mensual";
 let activeMonthIdx = new Date().getMonth();
 let ready = false;
 let expandedFijos = false;
+let expandedExtras = false;
 let goals = [];
 let showAddGoalForm = false;
 
@@ -267,6 +405,13 @@ function hasClaudeStorage() {
 }
 
 async function storageGet(key) {
+  if (FIREBASE_CONFIGURED && currentUser) {
+    try {
+      const doc = await db.collection("presupuestos").doc(currentUser.uid).get();
+      const data = doc.exists ? doc.data() : {};
+      return data[key] !== undefined ? data[key] : null;
+    } catch (e) { console.error("Error leyendo de Firestore", e); return null; }
+  }
   if (hasClaudeStorage()) {
     try {
       const r = await window.storage.get(key, false);
@@ -277,6 +422,12 @@ async function storageGet(key) {
 }
 
 async function storageSet(key, value) {
+  if (FIREBASE_CONFIGURED && currentUser) {
+    try {
+      await db.collection("presupuestos").doc(currentUser.uid).set({ [key]: value }, { merge: true });
+      return true;
+    } catch (e) { console.error("Error guardando en Firestore", e); return false; }
+  }
   if (hasClaudeStorage()) {
     try { await window.storage.set(key, value, false); return true; }
     catch (e) { console.error("Error guardando en Claude", e); return false; }
@@ -292,6 +443,7 @@ async function loadData() {
   if (m) { try { monthsData = JSON.parse(m); } catch (e) {} }
   const g = await storageGet("finanzas_objetivos");
   if (g) { try { goals = JSON.parse(g); } catch (e) {} }
+  applyTheme(params.tema);
 }
 
 let saveTimeout = null;
@@ -434,6 +586,8 @@ function calcMonth(mData) {
   let ocasional = 0;
   if (params.mesesSeguro.includes(mData.mes)) ocasional += params.seguroCoche;
   if (params.mesRodaje === mData.mes) ocasional += params.rodaje;
+  const extrasTotal = (params.extras || []).reduce((acc, ex) => acc + (Number(ex.importe) || 0), 0);
+  ocasional += extrasTotal;
 
   const totalFijosOcasional = fijosEsenciales + subsPelu + inversion + ahorroFijo + ocasional;
   const ocioPresupuestado = Math.min(salario, params.salarioBase) - totalFijosOcasional;
@@ -459,7 +613,7 @@ function calcMonth(mData) {
   const comprobacion = (salario + ingresosExtra) - (totalSantander + totalTradeRepublic + totalING);
 
   return {
-    fijosEsenciales, fijosEsencialesReal, subsPelu, inversion, ahorroFijo, ocasional,
+    fijosEsenciales, fijosEsencialesReal, subsPelu, inversion, ahorroFijo, ocasional, extrasTotal,
     gastoRealGasolina, ajusteGasolina, gastoRealCompra, ajusteCompra, ingresosExtra, gastoExcepcional,
     gastoExcepcionalNota: mData.gastoExcepcionalNota || "",
     totalFijosOcasional, ocioPresupuestado, extraSantander, ajuste: ajusteOcio,
@@ -554,7 +708,15 @@ function computeResultsHtml(mData) {
       <div class="result-row"><span class="label">Suscripciones + peluquería</span><span class="value">${euro(r.subsPelu)}</span></div>
       <div class="result-row"><span class="label">Inversión automática</span><span class="value">${euro(r.inversion)}</span></div>
       <div class="result-row"><span class="label">Ahorro fijo</span><span class="value">${euro(r.ahorroFijo)}</span></div>
-      <div class="result-row"><span class="label">Gastos ocasionales coche</span><span class="value">${euro(r.ocasional)}</span></div>
+      <div class="result-row"><span class="label">Gastos ocasionales coche</span><span class="value">${euro(r.ocasional - r.extrasTotal)}</span></div>
+      ${(params.extras || []).length ? `
+      <div class="result-row expandable-head" id="toggle-extras">
+        <span class="label">Gastos personalizados <span class="arrow ${expandedExtras ? "open" : ""}">▶</span></span>
+        <span class="value">${euro(r.extrasTotal)}</span>
+      </div>
+      <div class="sub-rows ${expandedExtras ? "open" : ""}">
+        ${(params.extras || []).map(ex => `<div class="result-row sub"><span class="label">${escapeHtml(ex.nombre)}</span><span class="value">${euro(Number(ex.importe) || 0)}</span></div>`).join("")}
+      </div>` : ""}
       <div class="result-row"><span class="label">Ocio presupuestado</span><span class="value">${euro(r.ocioPresupuestado)}</span></div>
       <div class="result-row"><span class="label">Ocio real gastado</span><span class="value">${euro(r.ocioRealGastado)}</span></div>
       <div class="result-row"><span class="label">Extra sobre salario base</span><span class="value">${euro(r.extraSantander)}</span></div>
@@ -705,7 +867,9 @@ function renderAjustes() {
   const monthOptions = (selected) => MONTHS.map(m => `<option value="${m}" ${m===selected?"selected":""}>${m}</option>`).join("");
   const seguroMes1 = p.mesesSeguro[0] || "Abril";
   const seguroMes2 = p.mesesSeguro[1] || "Mayo";
-  const storageMode = hasClaudeStorage()
+  const storageMode = (FIREBASE_CONFIGURED && currentUser)
+    ? `<div class="ok-banner">☁️ Sesión iniciada como <strong>${escapeHtml(currentUser.email)}</strong> — tus datos se guardan en la nube y se ven igual en cualquier dispositivo. <button class="btn small secondary" id="btn-logout" style="width:auto; margin-top:8px;">Cerrar sesión</button></div>`
+    : hasClaudeStorage()
     ? `<div class="ok-banner">☁️ Guardando en tu cuenta de Claude — debería verse igual en tus demás dispositivos dentro de la app.</div>`
     : `<div class="warn-banner" style="background:#FFF6D9; color:#8A6D1D; border-color:#F0DFA0;">💾 Guardando solo en este navegador — no se comparte con otros dispositivos. Configura Google Sheets más abajo para tener un punto en común.</div>`;
 
@@ -749,6 +913,39 @@ function renderAjustes() {
         <div class="field"><label>Mes 2 del seguro</label><select id="p-mesSeguro2">${monthOptions(seguroMes2)}</select></div>
       </div>
       <div class="field"><label>Mes del rodaje / ITV</label><select id="p-mesRodaje">${monthOptions(p.mesRodaje)}</select></div>
+    </div>
+
+    <div class="section-title">Tus gastos personalizados</div>
+    <div class="card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Añade cualquier gasto fijo mensual que no encaje arriba (gimnasio, colegio, suscripción de streaming...). Se suma cada mes a tus gastos fijos.</p>
+      ${(p.extras || []).length ? (p.extras || []).map(ex => `
+        <div class="result-row">
+          <span class="label">${escapeHtml(ex.nombre)}</span>
+          <span class="value" style="display:flex; align-items:center; gap:8px;">
+            ${euro(Number(ex.importe) || 0)}
+            <button class="goal-delete" data-extra="${ex.id}" aria-label="Eliminar gasto">✕</button>
+          </span>
+        </div>
+      `).join("") : `<p style="font-size:13px; color:var(--gray); margin:0 0 10px;">Aún no has añadido ninguno.</p>`}
+      <div class="two-col" style="margin-top:10px;">
+        <div class="field"><label>Nombre</label><input type="text" id="new-extra-name" placeholder="Ej. Gimnasio"></div>
+        <div class="field"><label>Importe mensual</label><input type="number" step="0.01" id="new-extra-amount" placeholder="Ej. 35"></div>
+      </div>
+      <button class="btn" id="btn-add-extra">+ Añadir gasto</button>
+    </div>
+
+    <div class="section-title">Color de la app</div>
+    <div class="card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Elige el tema de color. Es solo tuyo — cada persona que use la app puede elegir el suyo.</p>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        ${Object.entries(THEMES).map(([id, t]) => `
+          <button data-tema="${id}" style="
+            width:52px; height:52px; border-radius:50%; border:3px solid ${p.tema===id?"var(--navy)":"transparent"};
+            background:${t.navy}; display:flex; align-items:center; justify-content:center; padding:0;">
+            ${p.tema===id ? '<span style="color:#fff; font-size:16px;">✓</span>' : ""}
+          </button>
+        `).join("")}
+      </div>
     </div>
 
     <div class="section-title">Google Sheets</div>
@@ -871,11 +1068,40 @@ function attachHandlers() {
     saveGoals();
     render();
   };
-  document.querySelectorAll(".goal-delete").forEach(btn => {
+  document.querySelectorAll(".goal-delete[data-goal]").forEach(btn => {
     btn.onclick = () => {
       const id = Number(btn.dataset.goal);
       goals = goals.filter(g => g.id !== id);
       saveGoals();
+      render();
+    };
+  });
+
+  const addExtraBtn = document.getElementById("btn-add-extra");
+  if (addExtraBtn) addExtraBtn.onclick = () => {
+    const nameEl = document.getElementById("new-extra-name");
+    const amtEl = document.getElementById("new-extra-amount");
+    const nombre = nameEl.value.trim();
+    const importe = Number(amtEl.value);
+    if (!nombre || !importe || importe <= 0) { alert("Escribe un nombre y un importe válido."); return; }
+    params.extras = [...(params.extras || []), { id: Date.now(), nombre, importe }];
+    saveParams();
+    render();
+  };
+  document.querySelectorAll(".goal-delete[data-extra]").forEach(btn => {
+    btn.onclick = () => {
+      const id = Number(btn.dataset.extra);
+      params.extras = (params.extras || []).filter(ex => ex.id !== id);
+      saveParams();
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-tema]").forEach(btn => {
+    btn.onclick = () => {
+      params.tema = btn.dataset.tema;
+      applyTheme(params.tema);
+      saveParams();
       render();
     };
   });
@@ -908,6 +1134,9 @@ function attachHandlers() {
   const syncBtn = document.getElementById("btn-sync-sheets");
   if (syncBtn) syncBtn.onclick = () => syncToSheets(true);
 
+  const logoutBtn = document.getElementById("btn-logout");
+  if (logoutBtn) logoutBtn.onclick = () => { if (auth) auth.signOut(); };
+
   const resetBtn = document.getElementById("btn-reset");
   if (resetBtn) resetBtn.onclick = async () => {
     if (!confirm("¿Seguro que quieres borrar todos tus datos guardados? Esta acción no se puede deshacer.")) return;
@@ -930,6 +1159,14 @@ function attachResultHandlers() {
       attachResultHandlers();
     };
   }
+  const toggleExtras = document.getElementById("toggle-extras");
+  if (toggleExtras) {
+    toggleExtras.onclick = () => {
+      expandedExtras = !expandedExtras;
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      attachResultHandlers();
+    };
+  }
 }
 
 function updatePillState() {
@@ -947,12 +1184,29 @@ document.querySelectorAll("nav.tabbar button").forEach(btn => {
 
 // ---------- Init ----------
 (async function init() {
-  await loadData();
-  ready = true;
-  render();
+  if (FIREBASE_CONFIGURED) {
+    setupAuthHandlers();
+    showAuthScreen();
+    auth.onAuthStateChanged(async (user) => {
+      if (user) {
+        currentUser = user;
+        showApp();
+        await loadData();
+        ready = true;
+        render();
+      } else {
+        currentUser = null;
+        ready = false;
+        showAuthScreen();
+      }
+    });
+  } else {
+    await loadData();
+    ready = true;
+    render();
+  }
 })();
 
-// ---------- PWA: registra el service worker si el navegador lo soporta ----------
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("sw.js").catch((e) => console.error("SW error:", e));
