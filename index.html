@@ -58,6 +58,18 @@
 
   main{flex:1; padding:16px 14px 8px;}
 
+  .year-switch{
+    display:flex; align-items:center; justify-content:center; gap:14px;
+    margin:2px 0 10px;
+  }
+  .year-switch button{
+    width:34px; height:34px; border-radius:50%; border:1px solid var(--border);
+    background:#fff; color:var(--navy); font-size:18px; font-weight:700; line-height:1;
+  }
+  .year-switch button:active{background:var(--offwhite);}
+  .year-switch button:disabled{opacity:.35; pointer-events:none;}
+  .year-switch .year-label{font-size:15px; font-weight:800; color:var(--navy); min-width:110px; text-align:center;}
+
   .month-scroller{
     display:flex; gap:8px; overflow-x:auto; padding:4px 2px 10px;
     -webkit-overflow-scrolling:touch;
@@ -143,6 +155,12 @@
     background:#E7F5F2; color:var(--teal); border:1px solid #BFE6DF;
     border-radius:10px; padding:10px 12px; font-size:12px; margin-top:10px;
   }
+  .compare-row{
+    font-size:12.5px; font-weight:700; margin-top:10px; padding:8px 4px; text-align:center;
+  }
+  .compare-row.up{color:var(--teal);}
+  .compare-row.down{color:var(--red);}
+  .compare-row.equal{color:var(--light-gray); font-weight:600;}
 
   .kpi-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px;}
   .kpi{
@@ -353,8 +371,6 @@ const DEFAULT_PARAMS = {
   colchon: 10000,
   saldoSantander: 0,
   saldoTradeRepublic: 0,
-  googleSheetsUrl: "",
-  autoSyncSheets: false,
   extras: [],       // gastos fijos personalizados: [{id, nombre, importe}]
   tema: "navy",      // tema de color elegido
 };
@@ -380,7 +396,65 @@ function applyTheme(temaId) {
 }
 
 let params = { ...DEFAULT_PARAMS };
-let monthsData = MONTHS.map(m => ({ mes: m, salario: null, ajusteOcio: null, ajusteGasolina: null, ajusteCompra: null, ingresosExtra: null, gastoExcepcional: null, gastoExcepcionalNota: null }));
+function blankYearMonths() {
+  return MONTHS.map(m => ({ mes: m, salario: null, ajusteOcio: null, ajusteGasolina: null, ajusteCompra: null, ingresosExtra: null, gastoExcepcional: null, gastoExcepcionalNota: null }));
+}
+
+let monthsDataByYear = {}; // { "2026": [ {mes, salario, ...} x12 ], "2027": [...] }
+let activeYear = new Date().getFullYear();
+
+function getMonthsForYear(year) {
+  const key = String(year);
+  if (!monthsDataByYear[key]) monthsDataByYear[key] = blankYearMonths();
+  return monthsDataByYear[key];
+}
+
+let monthsData = getMonthsForYear(activeYear); // referencia al año activo; cambia con changeYear()
+
+function changeYear(newYear) {
+  activeYear = newYear;
+  monthsData = getMonthsForYear(activeYear);
+  render();
+}
+
+// Suma de lo enviado a cada cuenta en TODOS los años con datos (para saldos y objetivos,
+// que no dependen del año que estés mirando en pantalla).
+function sumAllYears(fieldFn) {
+  let total = 0;
+  Object.values(monthsDataByYear).forEach(yearMonths => {
+    yearMonths.forEach(m => {
+      const r = calcMonth(m);
+      if (r) total += fieldFn(r);
+    });
+  });
+  return total;
+}
+
+// Contribución de los años ANTERIORES al indicado (para arrastrar saldos año a año en Resumen).
+function priorYearsContribution(year) {
+  let santander = 0, tradeRepublic = 0;
+  Object.keys(monthsDataByYear).forEach(y => {
+    if (Number(y) < year) {
+      monthsDataByYear[y].forEach(m => {
+        const r = calcMonth(m);
+        if (r) { santander += r.totalSantander; tradeRepublic += r.totalTradeRepublic; }
+      });
+    }
+  });
+  return { santander, tradeRepublic };
+}
+
+// Mes cronológicamente anterior al indicado (cruza al año previo si hace falta),
+// para la comparativa "vs mes anterior" en la pestaña Mensual.
+function getPreviousMonthInfo(year, monthIdx) {
+  let y = year, idx = monthIdx - 1;
+  if (idx < 0) { idx = 11; y = year - 1; }
+  const yearMonths = monthsDataByYear[String(y)];
+  const mData = yearMonths ? yearMonths[idx] : null;
+  const label = MONTHS[idx] + (y !== year ? ` ${y}` : "");
+  return { mData, label };
+}
+
 let activeTab = "mensual";
 let activeMonthIdx = new Date().getMonth();
 let ready = false;
@@ -440,7 +514,18 @@ async function loadData() {
   const p = await storageGet("finanzas_parametros");
   if (p) { try { params = { ...DEFAULT_PARAMS, ...JSON.parse(p) }; } catch (e) {} }
   const m = await storageGet("finanzas_meses");
-  if (m) { try { monthsData = JSON.parse(m); } catch (e) {} }
+  if (m) {
+    try {
+      const parsed = JSON.parse(m);
+      if (Array.isArray(parsed)) {
+        // Formato antiguo (un solo año sin distinguir cuál) → lo migramos al año en curso.
+        monthsDataByYear = { [String(new Date().getFullYear())]: parsed };
+      } else {
+        monthsDataByYear = parsed;
+      }
+    } catch (e) {}
+  }
+  monthsData = getMonthsForYear(activeYear);
   const g = await storageGet("finanzas_objetivos");
   if (g) { try { goals = JSON.parse(g); } catch (e) {} }
   applyTheme(params.tema);
@@ -450,61 +535,14 @@ let saveTimeout = null;
 async function saveParams() {
   await storageSet("finanzas_parametros", JSON.stringify(params));
   showToast();
-  if (params.autoSyncSheets) syncToSheets(false);
 }
 async function saveMonths() {
-  await storageSet("finanzas_meses", JSON.stringify(monthsData));
+  await storageSet("finanzas_meses", JSON.stringify(monthsDataByYear));
   showToast();
-  if (params.autoSyncSheets) syncToSheets(false);
 }
 async function saveGoals() {
   await storageSet("finanzas_objetivos", JSON.stringify(goals));
   showToast();
-  if (params.autoSyncSheets) syncToSheets(false);
-}
-
-function buildSyncPayload() {
-  const meses = monthsData.map(m => {
-    const r = calcMonth(m);
-    return {
-      Mes: m.mes,
-      Salario: m.salario ?? "",
-      AjusteOcio: m.ajusteOcio ?? "",
-      AjusteGasolina: m.ajusteGasolina ?? "",
-      AjusteCompra: m.ajusteCompra ?? "",
-      IngresosExtra: m.ingresosExtra ?? "",
-      GastoExcepcional: m.gastoExcepcional ?? "",
-      ConceptoGastoExcepcional: m.gastoExcepcionalNota ?? "",
-      TotalSantander: r ? r.totalSantander : "",
-      TotalTradeRepublic: r ? r.totalTradeRepublic : "",
-      TotalING: r ? r.totalING : "",
-      Comprobacion: r ? r.comprobacion : "",
-    };
-  });
-  const parametros = { ...params };
-  delete parametros.googleSheetsUrl;
-  const objetivos = goals.map(g => ({ Nombre: g.nombre, Meta: g.meta }));
-  return { meses, parametros, objetivos, actualizado: new Date().toLocaleString("es-ES") };
-}
-
-async function syncToSheets(manual) {
-  const url = (params.googleSheetsUrl || "").trim();
-  if (!url) {
-    if (manual) alert("Primero pega la URL de tu Google Apps Script en Ajustes.");
-    return;
-  }
-  try {
-    await fetch(url, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(buildSyncPayload()),
-    });
-    if (manual) showToast();
-  } catch (e) {
-    console.error("Error sincronizando con Google Sheets", e);
-    if (manual) alert("No se ha podido conectar. Revisa la URL y tu conexión a internet.");
-  }
 }
 
 function exportBackup() {
@@ -640,6 +678,18 @@ function render() {
   attachHandlers();
 }
 
+function renderYearSwitch() {
+  const hasData = (monthsDataByYear[String(activeYear)] || []).some(m => m.salario !== null && m.salario !== undefined && m.salario !== "");
+  const atMin = activeYear <= new Date().getFullYear();
+  return `
+    <div class="year-switch">
+      <button id="year-prev" aria-label="Año anterior" ${atMin ? "disabled" : ""}>‹</button>
+      <span class="year-label">${activeYear}${hasData ? "" : " (sin datos)"}</span>
+      <button id="year-next" aria-label="Año siguiente">›</button>
+    </div>
+  `;
+}
+
 function renderMensual() {
   const pills = MONTHS.map((m, i) => {
     const filled = monthsData[i].salario !== null && monthsData[i].salario !== undefined && monthsData[i].salario !== "";
@@ -652,6 +702,7 @@ function renderMensual() {
   const mData = monthsData[activeMonthIdx];
 
   return `
+    ${renderYearSwitch()}
     <div class="month-scroller">${pills}</div>
     <div class="card">
       <div class="field">
@@ -733,8 +784,23 @@ function computeResultsHtml(mData) {
       ${sanNeg
         ? `<div class="warn-banner">⚠️ Este mes el sobregasto de ocio, compra, gasolina y/o un gasto excepcional supera lo que ibas a meter en Santander. Tendrás que sacar dinero de lo ya ahorrado allí.</div>`
         : `<div class="ok-banner">Comprobación: ${euro(r.comprobacion)} (debe ser 0 €)</div>`}
+      ${renderComparisonRow(r)}
     </div>
   `;
+}
+
+function renderComparisonRow(r) {
+  const { mData: prevMData, label: prevLabel } = getPreviousMonthInfo(activeYear, activeMonthIdx);
+  const prevR = prevMData ? calcMonth(prevMData) : null;
+  if (!prevR) return "";
+  const delta = r.totalSantander - prevR.totalSantander;
+  if (Math.abs(delta) < 0.005) {
+    return `<div class="compare-row equal">= Igual que en ${prevLabel} (${euro0(r.totalSantander)} a Santander)</div>`;
+  }
+  const cls = delta > 0 ? "up" : "down";
+  const arrow = delta > 0 ? "▲" : "▼";
+  const word = delta > 0 ? "más" : "menos";
+  return `<div class="compare-row ${cls}">${arrow} ${euro(Math.abs(delta))} ${word} a Santander que en ${prevLabel}</div>`;
 }
 
 function renderResumen() {
@@ -753,16 +819,22 @@ function renderResumen() {
   const fijosEsencialesMes = params.alquiler + params.compra + params.gasolina;
   const mesesColchon = fijosEsencialesMes ? params.colchon / fijosEsencialesMes : 0;
 
+  // Los saldos arrastran lo acumulado en años anteriores, no empiezan de cero cada enero.
+  const prior = priorYearsContribution(activeYear);
   let rows = "";
-  let saldoSan = params.saldoSantander;
-  let saldoTR = params.saldoTradeRepublic;
+  let saldoSan = params.saldoSantander + prior.santander;
+  let saldoTR = params.saldoTradeRepublic + prior.tradeRepublic;
   MONTHS.forEach((m, i) => {
     const r = filled[i];
     if (r) { saldoSan += r.totalSantander; saldoTR += r.totalTradeRepublic; }
-    rows += `<tr><td>${m.slice(0,3)}</td><td>${r ? euro0(r.totalSantander) : "—"}</td><td>${euro0(saldoSan)}</td><td>${r ? euro0(saldoTR) : "—"}</td><td>${euro0(saldoTR)}</td></tr>`;
+    rows += `<tr><td>${m.slice(0,3)}</td><td>${r ? euro0(r.totalSantander) : "—"}</td><td>${euro0(saldoSan)}</td><td>${r ? euro0(r.totalTradeRepublic) : "—"}</td><td>${euro0(saldoTR)}</td></tr>`;
   });
 
+  // El saldo "actual" para los objetivos es el de TODOS los años con datos, no solo el año que estás mirando.
+  const saldoSantanderActual = params.saldoSantander + sumAllYears(r => r.totalSantander);
+
   return `
+    ${renderYearSwitch()}
     <div class="section-title">KPIs del año${count < 12 ? ` (${count} de 12 meses)` : ""}</div>
     <div class="kpi-grid">
       <div class="kpi"><div class="big">${euro0(salarioTotal)}</div><div class="lbl">Salario total del año</div></div>
@@ -782,7 +854,7 @@ function renderResumen() {
         </table>
       </div>
     </div>
-    <p style="font-size:11px; color:var(--light-gray); margin:0 0 10px;">Los saldos parten de lo que pongas en Ajustes como saldo inicial y no incluyen rentabilidad de las inversiones.</p>
+    <p style="font-size:11px; color:var(--light-gray); margin:0 0 10px;">Los saldos arrastran lo acumulado en años anteriores y no incluyen rentabilidad de las inversiones.</p>
 
     <div class="section-title">Meses con sobregasto</div>
     <div class="card">
@@ -791,7 +863,7 @@ function renderResumen() {
 
     <div class="section-title">Objetivos en Santander</div>
     <div class="card">
-      ${renderGoalsSection(saldoSan)}
+      ${renderGoalsSection(saldoSantanderActual)}
     </div>
   `;
 }
@@ -871,7 +943,7 @@ function renderAjustes() {
     ? `<div class="ok-banner">☁️ Sesión iniciada como <strong>${escapeHtml(currentUser.email)}</strong> — tus datos se guardan en la nube y se ven igual en cualquier dispositivo. <button class="btn small secondary" id="btn-logout" style="width:auto; margin-top:8px;">Cerrar sesión</button></div>`
     : hasClaudeStorage()
     ? `<div class="ok-banner">☁️ Guardando en tu cuenta de Claude — debería verse igual en tus demás dispositivos dentro de la app.</div>`
-    : `<div class="warn-banner" style="background:#FFF6D9; color:#8A6D1D; border-color:#F0DFA0;">💾 Guardando solo en este navegador — no se comparte con otros dispositivos. Configura Google Sheets más abajo para tener un punto en común.</div>`;
+    : `<div class="warn-banner" style="background:#FFF6D9; color:#8A6D1D; border-color:#F0DFA0;">💾 Guardando solo en este navegador — no se comparte con otros dispositivos. Inicia sesión para tener tus datos en cualquier dispositivo.</div>`;
 
   return `
     <div class="card" style="margin-bottom:14px;">${storageMode}</div>
@@ -948,21 +1020,6 @@ function renderAjustes() {
       </div>
     </div>
 
-    <div class="section-title">Google Sheets</div>
-    <div class="card">
-      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Pega aquí la URL de tu Google Apps Script (te explico cómo crearla) para volcar tus datos a un Google Sheet propio.</p>
-      <div class="field">
-        <label>URL de Apps Script</label>
-        <input type="text" id="p-sheetsUrl" placeholder="https://script.google.com/macros/s/.../exec" value="${p.googleSheetsUrl || ""}">
-      </div>
-      <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--navy); font-weight:600; margin:6px 0 12px;">
-        <input type="checkbox" id="p-autoSync" ${p.autoSyncSheets ? "checked" : ""} style="width:18px;height:18px;">
-        Sincronizar automáticamente cada vez que guarde algo
-      </label>
-      <button class="btn" id="btn-sync-sheets">🔄 Sincronizar ahora</button>
-      <p style="font-size:11px; color:var(--light-gray); margin:10px 0 0;">Como el navegador no puede confirmar que Google lo recibió, si algo falla revisa la URL o vuelve a desplegar el script.</p>
-    </div>
-
     <div class="section-title">Copia de seguridad</div>
     <div class="card">
       <p style="font-size:12.5px; color:var(--gray); margin:0 0 12px;">Descarga un Excel con todos tus datos tal y como están ahora mismo (meses, parámetros y objetivos). No hay backup automático real: los navegadores no permiten guardar en tus archivos sin que tú lo pidas, así que descárgalo cuando quieras tener una copia al día.</p>
@@ -978,6 +1035,19 @@ function attachHandlers() {
   document.querySelectorAll(".month-pill").forEach(btn => {
     btn.onclick = () => { activeMonthIdx = Number(btn.dataset.month); render(); };
   });
+
+  const yearPrev = document.getElementById("year-prev");
+  if (yearPrev) yearPrev.onclick = () => {
+    const nowYear = new Date().getFullYear();
+    if (activeYear <= nowYear) return; // no se puede ir a años anteriores al actual
+    changeYear(activeYear - 1);
+  };
+  const yearNext = document.getElementById("year-next");
+  if (yearNext) yearNext.onclick = () => {
+    const nowYear = new Date().getFullYear();
+    if (activeYear >= nowYear + 5) return;
+    changeYear(activeYear + 1);
+  };
 
   const salarioInput = document.getElementById("input-salario");
   if (salarioInput) {
@@ -1127,21 +1197,16 @@ function attachHandlers() {
   const exportBtn = document.getElementById("btn-export");
   if (exportBtn) exportBtn.onclick = exportBackup;
 
-  const sheetsUrlInput = document.getElementById("p-sheetsUrl");
-  if (sheetsUrlInput) sheetsUrlInput.onchange = () => { params.googleSheetsUrl = sheetsUrlInput.value.trim(); saveParams(); };
-  const autoSyncInput = document.getElementById("p-autoSync");
-  if (autoSyncInput) autoSyncInput.onchange = () => { params.autoSyncSheets = autoSyncInput.checked; saveParams(); };
-  const syncBtn = document.getElementById("btn-sync-sheets");
-  if (syncBtn) syncBtn.onclick = () => syncToSheets(true);
-
   const logoutBtn = document.getElementById("btn-logout");
   if (logoutBtn) logoutBtn.onclick = () => { if (auth) auth.signOut(); };
 
   const resetBtn = document.getElementById("btn-reset");
   if (resetBtn) resetBtn.onclick = async () => {
-    if (!confirm("¿Seguro que quieres borrar todos tus datos guardados? Esta acción no se puede deshacer.")) return;
+    if (!confirm("¿Seguro que quieres borrar todos tus datos guardados, de todos los años? Esta acción no se puede deshacer.")) return;
     params = { ...DEFAULT_PARAMS };
-    monthsData = MONTHS.map(m => ({ mes: m, salario: null, ajusteOcio: null, ajusteGasolina: null, ajusteCompra: null, ingresosExtra: null, gastoExcepcional: null, gastoExcepcionalNota: null }));
+    monthsDataByYear = {};
+    activeYear = new Date().getFullYear();
+    monthsData = getMonthsForYear(activeYear);
     goals = [];
     await saveParams();
     await saveMonths();
