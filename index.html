@@ -14,6 +14,12 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Presupuesto">
 <style>
+  .signed-wrap{display:flex; gap:8px; align-items:stretch;}
+  .signed-wrap input{flex:1; min-width:0;}
+  .sign-btn{flex:0 0 auto; width:48px; border-radius:10px; border:1.5px solid var(--border); background:var(--surface); color:var(--fg); font-size:20px; font-weight:700;}
+  .sign-btn:active{background:var(--offwhite);}
+  input.signed-input{width:100%; font-size:16px; padding:11px 12px; border-radius:10px; border:1.5px solid var(--border); background:var(--input-bg); color:var(--fg); font-weight:600;}
+  input.signed-input:focus{outline:2px solid var(--gold); border-color:var(--gold);}
   textarea{width:100%; font-size:15px; padding:10px 12px; border-radius:10px; border:1.5px solid var(--border); background:var(--input-bg); color:var(--fg); font-family:inherit; resize:vertical;}
   textarea:focus{outline:2px solid var(--gold); border-color:var(--gold);}
   input:disabled, button:disabled{opacity:.55;}
@@ -731,6 +737,13 @@ function migrarExcepcionales() {
     m.gastoExcepcional = null; m.gastoExcepcionalNota = null;
   }));
 }
+// Convierte lo escrito ("-30", "12,5") en número; vacío o solo "-" cuenta como sin valor.
+function parseNum(v) {
+  const t = String(v ?? "").trim().replace(",", ".");
+  if (t === "" || t === "-" || t === "." || t === "-.") return null;
+  const n = Number(t);
+  return isNaN(n) ? null : n;
+}
 function extraAplica(ex, mes) {
   return !Array.isArray(ex.meses) || ex.meses.length === 0 || ex.meses.includes(mes);
 }
@@ -870,15 +883,15 @@ function renderMensual() {
       </div>
       <div class="field">
         <label>Ajuste de ocio <span class="hint">Positivo si gastaste de más · negativo si te sobró</span></label>
-        <input type="number" inputmode="decimal" step="0.01" id="input-ajuste" placeholder="Ej. 50 o -30" value="${mData.ajusteOcio ?? ""}">
+        <div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="input-ajuste" placeholder="Ej. 50 o -30" value="${mData.ajusteOcio ?? ""}"><button type="button" class="sign-btn" data-sign="input-ajuste" aria-label="Cambiar signo (más o menos)">±</button></div>
       </div>
       <div class="field">
         <label>Ajuste de gasolina <span class="hint">Presupuesto medio 100 € · positivo si gastaste de más, negativo si gastaste menos</span></label>
-        <input type="number" inputmode="decimal" step="0.01" id="input-ajuste-gasolina" placeholder="Ej. -30 si gastaste 70" value="${mData.ajusteGasolina ?? ""}">
+        <div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="input-ajuste-gasolina" placeholder="Ej. -30 si gastaste 70" value="${mData.ajusteGasolina ?? ""}"><button type="button" class="sign-btn" data-sign="input-ajuste-gasolina" aria-label="Cambiar signo (más o menos)">±</button></div>
       </div>
       <div class="field">
         <label>Ajuste de compra <span class="hint">Presupuesto medio 100 € · positivo si gastaste de más, negativo si gastaste menos</span></label>
-        <input type="number" inputmode="decimal" step="0.01" id="input-ajuste-compra" placeholder="Ej. -20 si gastaste 80" value="${mData.ajusteCompra ?? ""}">
+        <div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="input-ajuste-compra" placeholder="Ej. -20 si gastaste 80" value="${mData.ajusteCompra ?? ""}"><button type="button" class="sign-btn" data-sign="input-ajuste-compra" aria-label="Cambiar signo (más o menos)">±</button></div>
       </div>
       <div class="field">
         <label>Ingresos extra <span class="hint">Regalos u otros ingresos puntuales · va directo a Santander · 0 € por defecto</span></label>
@@ -1279,8 +1292,8 @@ function renderAjustes() {
     <div class="card">
       <div class="field"><label>Salario base de referencia</label><input type="number" step="0.01" id="p-salarioBase" value="${p.salarioBase}"></div>
       <div class="two-col">
-        <div class="field"><label>Saldo inicial Santander</label><input type="number" step="0.01" id="p-saldoSantander" value="${p.saldoSantander}"></div>
-        <div class="field"><label>Saldo inicial Trade Republic</label><input type="number" step="0.01" id="p-saldoTradeRepublic" value="${p.saldoTradeRepublic}"></div>
+        <div class="field"><label>Saldo inicial Santander</label><div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="p-saldoSantander" placeholder="0" value="${p.saldoSantander}"><button type="button" class="sign-btn" data-sign="p-saldoSantander" aria-label="Cambiar signo (más o menos)">±</button></div></div>
+        <div class="field"><label>Saldo inicial Trade Republic</label><div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="p-saldoTradeRepublic" placeholder="0" value="${p.saldoTradeRepublic}"><button type="button" class="sign-btn" data-sign="p-saldoTradeRepublic" aria-label="Cambiar signo (más o menos)">±</button></div></div>
       </div>
       <div class="field"><label>Colchón objetivo CAJA 7</label><input type="number" step="0.01" id="p-colchon" value="${p.colchon}"></div>
     </div>
@@ -1425,7 +1438,7 @@ function attachHandlers() {
   if (ajusteInput) {
     ajusteInput.oninput = () => {
       const v = ajusteInput.value;
-      monthsData[activeMonthIdx].ajusteOcio = v === "" ? null : Number(v);
+      monthsData[activeMonthIdx].ajusteOcio = parseNum(v);
       document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
       attachResultHandlers();
     };
@@ -1435,7 +1448,7 @@ function attachHandlers() {
   if (ajusteGasolinaInput) {
     ajusteGasolinaInput.oninput = () => {
       const v = ajusteGasolinaInput.value;
-      monthsData[activeMonthIdx].ajusteGasolina = v === "" ? null : Number(v);
+      monthsData[activeMonthIdx].ajusteGasolina = parseNum(v);
       document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
       attachResultHandlers();
     };
@@ -1445,7 +1458,7 @@ function attachHandlers() {
   if (ajusteCompraInput) {
     ajusteCompraInput.oninput = () => {
       const v = ajusteCompraInput.value;
-      monthsData[activeMonthIdx].ajusteCompra = v === "" ? null : Number(v);
+      monthsData[activeMonthIdx].ajusteCompra = parseNum(v);
       document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
       attachResultHandlers();
     };
@@ -1461,6 +1474,18 @@ function attachHandlers() {
     };
     ingresosExtraInput.onchange = saveMonths;
   }
+  // Botón ± : el teclado numérico del iPhone no tiene signo menos.
+  document.querySelectorAll("[data-sign]").forEach(btn => {
+    btn.onclick = () => {
+      const inp = document.getElementById(btn.dataset.sign);
+      if (!inp) return;
+      inp.value = inp.value.startsWith("-") ? inp.value.slice(1) : "-" + inp.value;
+      inp.dispatchEvent(new Event("input", { bubbles: true }));
+      inp.dispatchEvent(new Event("change", { bubbles: true }));
+      inp.focus();
+      try { const n = inp.value.length; inp.setSelectionRange(n, n); } catch (e) {}
+    };
+  });
   const notaEl = document.getElementById("input-nota");
   if (notaEl) {
     notaEl.oninput = () => { monthsData[activeMonthIdx].nota = notaEl.value; };
@@ -1471,7 +1496,7 @@ function attachHandlers() {
   const reopenBtn = document.getElementById("btn-reopen");
   if (reopenBtn) reopenBtn.onclick = () => { monthsData[activeMonthIdx].cerrado = false; saveMonths(); render(); };
   if (activeTab === "mensual" && monthsData[activeMonthIdx].cerrado) {
-    document.querySelectorAll("#input-salario,#input-ajuste,#input-ajuste-gasolina,#input-ajuste-compra,#input-ingresos-extra,#exc-concepto,#exc-importe,#btn-add-exc,[data-exc-del],#btn-copy-prev")
+    document.querySelectorAll("#input-salario,#input-ajuste,#input-ajuste-gasolina,#input-ajuste-compra,#input-ingresos-extra,#exc-concepto,#exc-importe,#btn-add-exc,[data-exc-del],#btn-copy-prev,[data-sign]")
       .forEach(el => { el.disabled = true; });
   }
   const addExcBtn = document.getElementById("btn-add-exc");
@@ -1581,7 +1606,7 @@ function attachHandlers() {
   Object.entries(paramFieldMap).forEach(([id, key]) => {
     const el = document.getElementById(id);
     if (el) el.onchange = () => {
-      const nuevo = Number(el.value) || 0;
+      const nuevo = parseNum(el.value) || 0;
       if (CAMPOS_HISTORIAL.includes(key)) {
         const desde = periodKey(efectoDesde.anio, efectoDesde.mes);
         const h = (params.historial && params.historial[key] && params.historial[key].length)
