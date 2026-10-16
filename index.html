@@ -14,6 +14,36 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Presupuesto">
 <style>
+  textarea{width:100%; font-size:15px; padding:10px 12px; border-radius:10px; border:1.5px solid var(--border); background:var(--input-bg); color:var(--fg); font-family:inherit; resize:vertical;}
+  textarea:focus{outline:2px solid var(--gold); border-color:var(--gold);}
+  input:disabled, button:disabled{opacity:.55;}
+  .closed-banner{display:flex; align-items:center; gap:10px; background:var(--ok-bg); color:var(--teal); border:1px solid var(--ok-border); border-radius:12px; padding:10px 12px; font-size:12.5px; margin-bottom:12px;}
+  .closed-banner span{flex:1; line-height:1.4;}
+  .closed-banner .btn{margin-top:0; width:auto; flex:0 0 auto;}
+  .cat-row{margin-bottom:10px;}
+  .cat-head{display:flex; justify-content:space-between; font-size:12.5px; font-weight:600; color:var(--fg); margin-bottom:4px;}
+  .cat-head .cat-val{color:var(--gray); font-weight:600;}
+  .cat-bar-bg{background:var(--offwhite); border-radius:999px; height:9px; overflow:hidden;}
+  .cat-bar-fill{height:100%; border-radius:999px;}
+  .goal-date-row{margin-top:8px;}
+  .goal-date-row label{font-size:11.5px; color:var(--gray); font-weight:600; display:flex; align-items:center; gap:8px;}
+  .goal-date-row input, #new-goal-date{font-size:13px; padding:5px 8px; border-radius:8px; border:1.5px solid var(--border); background:var(--input-bg); color:var(--fg); font-family:inherit;}
+  .goal-pace{font-size:12px; line-height:1.45; margin-top:8px; padding:8px 10px; border-radius:8px; font-weight:600;}
+  .goal-pace.ok{background:var(--ok-bg); color:var(--teal);}
+  .goal-pace.bad{background:var(--red-bg); color:var(--red);}
+  .print-only{display:none;}
+  @media print{
+    :root, :root[data-dark="1"]{--offwhite:#fff; --surface:#fff; --fg:#1E2761; --gray:#5B6472; --light-gray:#8A94A6; --border:#E3E8F2; --input-bg:#fff; --red-bg:#FCEAEA; --ok-bg:#E7F5F2;}
+    nav.tabbar, .no-print, .year-switch button, .goal-delete, #btn-add-goal, .goal-form, .goal-date-row, .save-toast{display:none !important;}
+    .print-only{display:block !important;}
+    body, #app{background:#fff !important; max-width:none !important; padding-bottom:0 !important;}
+    header{position:static !important; -webkit-print-color-adjust:exact; print-color-adjust:exact;}
+    .card, .kpi, .goal-card{break-inside:avoid; box-shadow:none;}
+    *{-webkit-print-color-adjust:exact; print-color-adjust:exact;}
+  }
+  .chip-row{display:flex; flex-wrap:wrap; gap:6px;}
+  .chip{padding:7px 11px; border-radius:999px; border:1px solid var(--border); background:var(--surface); color:var(--fg); font-size:12.5px; font-weight:600;}
+  .chip.on{background:var(--navy); color:#fff; border-color:var(--navy);}
   :root{
     --navy:#1E2761;
     --navy-dark:#141A47;
@@ -26,13 +56,32 @@
     --red:#C0392B;
     --red-bg:#FCEAEA;
     --border:#E3E8F2;
+    --fg:var(--navy);
+    --surface:#fff;
+    --input-bg:#FFFDF3;
+    --ok-bg:#E7F5F2;
+    --ok-border:#BFE6DF;
+    --warn-border:#F3C6C1;
+  }
+  :root[data-dark="1"]{
+    --offwhite:#10141F;
+    --fg:#E8ECF7;
+    --surface:#1B2130;
+    --input-bg:#222940;
+    --gray:#AAB3C7;
+    --light-gray:#7E869B;
+    --border:#2B3347;
+    --red-bg:#3A2020;
+    --ok-bg:#15332D;
+    --ok-border:#1F4A40;
+    --warn-border:#5B2E2A;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;}
   body{
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     background:var(--offwhite);
-    color:var(--navy);
+    color:var(--fg);
     -webkit-tap-highlight-color:transparent;
   }
   h1,h2,h3{font-family:Georgia,"Times New Roman",serif; margin:0;}
@@ -64,11 +113,11 @@
   }
   .year-switch button{
     width:34px; height:34px; border-radius:50%; border:1px solid var(--border);
-    background:#fff; color:var(--navy); font-size:18px; font-weight:700; line-height:1;
+    background:var(--surface); color:var(--fg); font-size:18px; font-weight:700; line-height:1;
   }
   .year-switch button:active{background:var(--offwhite);}
   .year-switch button:disabled{opacity:.35; pointer-events:none;}
-  .year-switch .year-label{font-size:15px; font-weight:800; color:var(--navy); min-width:110px; text-align:center;}
+  .year-switch .year-label{font-size:15px; font-weight:800; color:var(--fg); min-width:110px; text-align:center;}
 
   .month-scroller{
     display:flex; gap:8px; overflow-x:auto; padding:4px 2px 10px;
@@ -78,9 +127,9 @@
     flex:0 0 auto;
     padding:8px 14px;
     border-radius:999px;
-    background:#fff;
+    background:var(--surface);
     border:1px solid var(--border);
-    color:var(--navy);
+    color:var(--fg);
     font-size:13px;
     font-weight:600;
     white-space:nowrap;
@@ -89,13 +138,13 @@
   .month-pill.filled:not(.active){border-color:var(--teal); color:var(--teal);}
 
   .card{
-    background:#fff;
+    background:var(--surface);
     border:1px solid var(--border);
     border-radius:14px;
     padding:16px;
     margin-bottom:14px;
   }
-  .card h3{font-size:15px; color:var(--navy); margin-bottom:10px;}
+  .card h3{font-size:15px; color:var(--fg); margin-bottom:10px;}
   .field{margin-bottom:12px;}
   .field label{
     display:block; font-size:12.5px; color:var(--gray); margin-bottom:5px; font-weight:600;
@@ -106,8 +155,8 @@
     padding:11px 12px;
     border-radius:10px;
     border:1.5px solid var(--border);
-    background:#FFFDF3;
-    color:var(--navy);
+    background:var(--input-bg);
+    color:var(--fg);
     font-weight:600;
   }
   input[type=number]:focus, select:focus{outline:2px solid var(--gold); border-color:var(--gold);}
@@ -119,7 +168,7 @@
   }
   .result-row:last-child{border-bottom:none;}
   .result-row .label{color:var(--gray);}
-  .result-row .value{font-weight:700; color:var(--navy);}
+  .result-row .value{font-weight:700; color:var(--fg);}
 
   .result-row.expandable-head{cursor:pointer; user-select:none;}
   .result-row.expandable-head .label{display:flex; align-items:center; gap:6px;}
@@ -127,7 +176,7 @@
     display:inline-block; font-size:10px; color:var(--light-gray);
     transition:transform .18s ease; transform:rotate(0deg);
   }
-  .arrow.open{transform:rotate(90deg); color:var(--navy);}
+  .arrow.open{transform:rotate(90deg); color:var(--fg);}
   .sub-rows{
     max-height:0; overflow:hidden; transition:max-height .2s ease;
   }
@@ -148,11 +197,11 @@
   .dest-card.san.negative{background:var(--red);}
 
   .warn-banner{
-    background:var(--red-bg); color:var(--red); border:1px solid #F3C6C1;
+    background:var(--red-bg); color:var(--red); border:1px solid var(--warn-border);
     border-radius:10px; padding:10px 12px; font-size:12.5px; margin-top:10px; font-weight:600;
   }
   .ok-banner{
-    background:#E7F5F2; color:var(--teal); border:1px solid #BFE6DF;
+    background:var(--ok-bg); color:var(--teal); border:1px solid var(--ok-border);
     border-radius:10px; padding:10px 12px; font-size:12px; margin-top:10px;
   }
   .compare-row{
@@ -164,14 +213,14 @@
 
   .kpi-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px;}
   .kpi{
-    background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px;
+    background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:12px;
   }
-  .kpi .big{font-size:19px; font-weight:800; color:var(--navy);}
+  .kpi .big{font-size:19px; font-weight:800; color:var(--fg);}
   .kpi .lbl{font-size:11px; color:var(--gray); margin-top:2px; line-height:1.3;}
 
   .goal-card{border:1px solid var(--border); border-radius:12px; padding:12px; margin-bottom:10px;}
   .goal-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
-  .goal-name{font-weight:700; font-size:14px; color:var(--navy);}
+  .goal-name{font-weight:700; font-size:14px; color:var(--fg);}
   .goal-delete{background:none; border:none; color:var(--light-gray); font-size:14px; padding:2px 6px; line-height:1;}
   .goal-bar-bg{background:var(--offwhite); border-radius:999px; height:10px; overflow:hidden;}
   .goal-bar-fill{background:linear-gradient(90deg, var(--gold), var(--teal)); height:100%; border-radius:999px; transition:width .3s ease;}
@@ -182,7 +231,7 @@
   th,td{padding:7px 6px; text-align:right; border-bottom:1px solid var(--border);}
   th:first-child,td:first-child{text-align:left;}
   th{color:var(--gray); font-size:10.5px; text-transform:uppercase; letter-spacing:.02em;}
-  td{color:var(--navy); font-weight:600;}
+  td{color:var(--fg); font-weight:600;}
   .table-wrap{overflow-x:auto; border-radius:10px;}
 
   .section-title{font-size:13px; font-weight:700; color:var(--gray); text-transform:uppercase; letter-spacing:.03em; margin:18px 0 8px;}
@@ -192,13 +241,24 @@
     width:100%; padding:12px; border-radius:10px; border:none; font-size:14px; font-weight:700;
     background:var(--navy); color:#fff; margin-top:6px;
   }
-  .btn.secondary{background:#fff; color:var(--red); border:1.5px solid var(--red);}
+  .btn.secondary{background:var(--surface); color:var(--red); border:1.5px solid var(--red);}
   .btn.small{width:auto; padding:8px 14px; font-size:12.5px;}
+
+  .dark-switch{
+    width:46px; height:26px; border-radius:999px; border:none; background:var(--border);
+    position:relative; padding:0; flex:0 0 auto; transition:background .2s ease;
+  }
+  .dark-switch.on{background:var(--navy);}
+  .dark-switch-knob{
+    position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%;
+    background:#fff; transition:transform .2s ease; box-shadow:0 1px 3px rgba(0,0,0,.25);
+  }
+  .dark-switch.on .dark-switch-knob{transform:translateX(20px);}
 
   nav.tabbar{
     position:fixed; bottom:0; left:0; right:0;
     max-width:520px; margin:0 auto;
-    background:#fff; border-top:1px solid var(--border);
+    background:var(--surface); border-top:1px solid var(--border);
     display:flex; z-index:30;
     padding-bottom:env(safe-area-inset-bottom, 0);
   }
@@ -207,7 +267,7 @@
     color:var(--light-gray); font-weight:600; display:flex; flex-direction:column; align-items:center; gap:3px;
   }
   nav.tabbar button .ic{font-size:19px; line-height:1;}
-  nav.tabbar button.active{color:var(--navy);}
+  nav.tabbar button.active{color:var(--fg);}
   nav.tabbar button.active .ic{color:var(--gold);}
 
   .two-col{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
@@ -228,20 +288,24 @@
   }
   .auth-card{
     width:100%; max-width:360px;
-    background:#fff;
+    background:var(--surface);
     border:1px solid var(--border);
     border-radius:16px;
     padding:28px 24px;
     text-align:center;
   }
-  .auth-card h1{font-size:22px; color:var(--navy); margin-bottom:6px;}
+  .auth-card h1{font-size:22px; color:var(--fg); margin-bottom:6px;}
   .auth-card p{font-size:13px; color:var(--gray); margin:0 0 18px; line-height:1.4;}
   .auth-card input{
     width:100%; padding:12px 14px; margin-bottom:10px;
     border:1px solid var(--border); border-radius:10px;
-    font-size:15px; font-family:inherit; color:var(--navy);
+    font-size:15px; font-family:inherit; color:var(--fg);
   }
   .auth-card .btn{width:100%; margin-top:4px;}
+  .link-btn{
+    background:none; border:none; color:var(--fg); font-size:12.5px; font-weight:600;
+    margin-top:12px; padding:4px; text-decoration:underline; width:100%;
+  }
   #auth-error{font-size:12.5px; color:var(--red); margin-top:10px; display:none;}
   #auth-loading{font-size:12.5px; color:var(--light-gray); margin-top:10px;}
 </style>
@@ -259,6 +323,7 @@
     <input type="password" id="auth-password" placeholder="Contraseña (mín. 6 caracteres)" autocomplete="current-password">
     <button class="btn" id="auth-login">Entrar</button>
     <button class="btn secondary" id="auth-signup">Crear cuenta nueva</button>
+    <button class="link-btn" id="auth-forgot" type="button">¿Olvidaste tu contraseña?</button>
     <p id="auth-error"></p>
     <p id="auth-loading" style="display:none;">Conectando…</p>
   </div>
@@ -310,6 +375,7 @@ function traducirErrorAuth(code) {
     "auth/weak-password": "La contraseña necesita al menos 6 caracteres.",
     "auth/missing-password": "Escribe una contraseña.",
     "auth/too-many-requests": "Demasiados intentos. Espera un poco y vuelve a probar.",
+    "auth/missing-email": "Escribe primero tu correo electrónico ahí arriba.",
   };
   return map[code] || "Ha ocurrido un error. Inténtalo de nuevo.";
 }
@@ -353,6 +419,22 @@ function setupAuthHandlers() {
       await auth.createUserWithEmailAndPassword(emailEl.value.trim(), passEl.value);
     } catch (e) { showErr(e.code); } finally { setBusy(false); }
   };
+  document.getElementById("auth-forgot").onclick = async () => {
+    errEl.style.display = "none";
+    errEl.style.color = "";
+    const email = emailEl.value.trim();
+    if (!email) { showErr("auth/missing-email"); return; }
+    setBusy(true);
+    try {
+      await auth.sendPasswordResetEmail(email);
+      errEl.style.color = "var(--teal)";
+      errEl.textContent = "Te hemos enviado un correo a " + email + " para que elijas una contraseña nueva.";
+      errEl.style.display = "block";
+    } catch (e) {
+      errEl.style.color = "";
+      showErr(e.code);
+    } finally { setBusy(false); }
+  };
 }
 
 const DEFAULT_PARAMS = {
@@ -373,6 +455,8 @@ const DEFAULT_PARAMS = {
   saldoTradeRepublic: 0,
   extras: [],       // gastos fijos personalizados: [{id, nombre, importe}]
   tema: "navy",      // tema de color elegido
+  modoOscuro: false, // modo oscuro
+  historial: {},     // cambios de importes con fecha: { campo: [{desde, valor}] }
 };
 
 const THEMES = {
@@ -392,12 +476,19 @@ function applyTheme(temaId) {
   root.setProperty("--gold", t.gold);
   root.setProperty("--ice", t.ice);
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", t.navy);
+  if (meta) meta.setAttribute("content", params.modoOscuro ? "#10141F" : t.navy);
+}
+
+function applyDarkMode(on) {
+  document.documentElement.setAttribute("data-dark", on ? "1" : "0");
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta && on) meta.setAttribute("content", "#10141F");
+  else if (meta) { const t = THEMES[params.tema] || THEMES.navy; meta.setAttribute("content", t.navy); }
 }
 
 let params = { ...DEFAULT_PARAMS };
 function blankYearMonths() {
-  return MONTHS.map(m => ({ mes: m, salario: null, ajusteOcio: null, ajusteGasolina: null, ajusteCompra: null, ingresosExtra: null, gastoExcepcional: null, gastoExcepcionalNota: null }));
+  return MONTHS.map(m => ({ mes: m, salario: null, ajusteOcio: null, ajusteGasolina: null, ajusteCompra: null, ingresosExtra: null, gastoExcepcional: null, gastoExcepcionalNota: null, gastosExcepcionales: [], nota: "", cerrado: false }));
 }
 
 let monthsDataByYear = {}; // { "2026": [ {mes, salario, ...} x12 ], "2027": [...] }
@@ -525,10 +616,12 @@ async function loadData() {
       }
     } catch (e) {}
   }
+  migrarExcepcionales();
   monthsData = getMonthsForYear(activeYear);
   const g = await storageGet("finanzas_objetivos");
   if (g) { try { goals = JSON.parse(g); } catch (e) {} }
   applyTheme(params.tema);
+  applyDarkMode(!!params.modoOscuro);
 }
 
 let saveTimeout = null;
@@ -549,25 +642,32 @@ function exportBackup() {
   try {
     const wb = XLSX.utils.book_new();
 
-    // --- Hoja Meses ---
-    const mesesRows = monthsData.map(m => {
-      const r = calcMonth(m);
-      return {
-        "Mes": m.mes,
-        "Salario recibido": m.salario ?? "",
-        "Ajuste de ocio": m.ajusteOcio ?? "",
-        "Ajuste de gasolina": m.ajusteGasolina ?? "",
-        "Ajuste de compra": m.ajusteCompra ?? "",
-        "Ingresos extra": m.ingresosExtra ?? "",
-        "Gasto excepcional": m.gastoExcepcional ?? "",
-        "Concepto gasto excepcional": m.gastoExcepcionalNota ?? "",
-        "Total → Santander": r ? r.totalSantander : "",
-        "Total → Trade Republic": r ? r.totalTradeRepublic : "",
-        "Total → ING": r ? r.totalING : "",
-        "Comprobación": r ? r.comprobacion : "",
-      };
+    // --- Hoja Meses (TODOS los años guardados, no solo el que tienes abierto) ---
+    const years = Object.keys(monthsDataByYear).map(Number).sort((a, b) => a - b);
+    const mesesRows = [];
+    years.forEach(year => {
+      monthsDataByYear[String(year)].forEach(m => {
+        const r = calcMonth(m);
+        mesesRows.push({
+          "Año": year,
+          "Mes": m.mes,
+          "Salario recibido": m.salario ?? "",
+          "Ajuste de ocio": m.ajusteOcio ?? "",
+          "Ajuste de gasolina": m.ajusteGasolina ?? "",
+          "Ajuste de compra": m.ajusteCompra ?? "",
+          "Ingresos extra": m.ingresosExtra ?? "",
+          "Gasto excepcional": r ? r.gastoExcepcional : "",
+          "Concepto gasto excepcional": r ? r.gastoExcepcionalNota : "",
+          "Nota": m.nota || "",
+          "Mes cerrado": m.cerrado ? "Sí" : "",
+          "Total → Santander": r ? r.totalSantander : "",
+          "Total → Trade Republic": r ? r.totalTradeRepublic : "",
+          "Total → ING": r ? r.totalING : "",
+          "Comprobación": r ? r.comprobacion : "",
+        });
+      });
     });
-    const wsMeses = XLSX.utils.json_to_sheet(mesesRows);
+    const wsMeses = XLSX.utils.json_to_sheet(mesesRows.length ? mesesRows : [{ "Año": "", "Mes": "" }]);
     XLSX.utils.book_append_sheet(wb, wsMeses, "Meses");
 
     // --- Hoja Parámetros ---
@@ -587,6 +687,7 @@ function exportBackup() {
       ["Colchón objetivo CAJA 7", params.colchon],
       ["Saldo inicial Santander", params.saldoSantander],
       ["Saldo inicial Trade Republic", params.saldoTradeRepublic],
+      ...(params.extras || []).map(e => [`Extra: ${e.nombre} (${extraMesesTexto(e)})`, e.importe]),
     ];
     const wsParams = XLSX.utils.aoa_to_sheet([["Parámetro", "Valor"], ...paramRows]);
     XLSX.utils.book_append_sheet(wb, wsParams, "Parámetros");
@@ -612,37 +713,82 @@ function showToast() {
 }
 
 // ---------- Cálculo por mes (misma lógica que la hoja de cálculo) ----------
+// Lista de gastos excepcionales de un mes (compatible con el formato antiguo de un solo gasto).
+function excepcionalesDe(mData) {
+  if (Array.isArray(mData.gastosExcepcionales) && mData.gastosExcepcionales.length) return mData.gastosExcepcionales;
+  const v = Number(mData.gastoExcepcional);
+  if ((!Array.isArray(mData.gastosExcepcionales) || !mData.gastosExcepcionales.length) && v) {
+    return [{ id: 0, concepto: mData.gastoExcepcionalNota || "", importe: v }];
+  }
+  return [];
+}
+function migrarExcepcionales() {
+  Object.values(monthsDataByYear).forEach(arr => arr.forEach(m => {
+    if (!Array.isArray(m.gastosExcepcionales)) m.gastosExcepcionales = [];
+    if (!m.gastosExcepcionales.length && Number(m.gastoExcepcional)) {
+      m.gastosExcepcionales = [{ id: Date.now() + Math.random(), concepto: m.gastoExcepcionalNota || "", importe: Number(m.gastoExcepcional) }];
+    }
+    m.gastoExcepcional = null; m.gastoExcepcionalNota = null;
+  }));
+}
+function extraAplica(ex, mes) {
+  return !Array.isArray(ex.meses) || ex.meses.length === 0 || ex.meses.includes(mes);
+}
+function extraMesesTexto(ex) {
+  if (!Array.isArray(ex.meses) || ex.meses.length === 0 || ex.meses.length === 12) return "Todos los meses";
+  return MONTHS.filter(m => ex.meses.includes(m)).map(m => m.slice(0,3)).join(", ");
+}
+
+const CAMPOS_HISTORIAL = ["salarioBase","alquiler","compra","gasolina","suscripciones","peluqueria","inversion","ahorroFijo","seguroCoche","rodaje"];
+function yearOf(mData) {
+  if (mData._anio) return mData._anio;
+  for (const y of Object.keys(monthsDataByYear)) if (monthsDataByYear[y].includes(mData)) return Number(y);
+  return activeYear;
+}
+function periodKey(year, mesIdx) { return year * 100 + mesIdx + 1; }
+// Valor de un importe en un mes concreto, teniendo en cuenta los cambios con fecha.
+function pv(campo, mData) {
+  const h = params.historial && params.historial[campo];
+  if (!h || !h.length) return params[campo];
+  const key = periodKey(yearOf(mData), MONTHS.indexOf(mData.mes));
+  let val = h[0].valor;
+  for (const e of h) if (e.desde <= key) val = e.valor;
+  return val;
+}
+
 function calcMonth(mData) {
   const salario = mData.salario;
   if (salario === null || salario === undefined || salario === "") return null;
 
-  const fijosEsenciales = params.alquiler + params.compra + params.gasolina; // usa la gasolina presupuestada (referencia)
-  const subsPelu = params.suscripciones + params.peluqueria;
-  const inversion = params.inversion;
-  const ahorroFijo = params.ahorroFijo;
+  const fijosEsenciales = pv("alquiler", mData) + pv("compra", mData) + pv("gasolina", mData); // usa la gasolina presupuestada (referencia)
+  const subsPelu = pv("suscripciones", mData) + pv("peluqueria", mData);
+  const inversion = pv("inversion", mData);
+  const ahorroFijo = pv("ahorroFijo", mData);
 
   let ocasional = 0;
-  if (params.mesesSeguro.includes(mData.mes)) ocasional += params.seguroCoche;
-  if (params.mesRodaje === mData.mes) ocasional += params.rodaje;
-  const extrasTotal = (params.extras || []).reduce((acc, ex) => acc + (Number(ex.importe) || 0), 0);
+  if (params.mesesSeguro.includes(mData.mes)) ocasional += pv("seguroCoche", mData);
+  if (params.mesRodaje === mData.mes) ocasional += pv("rodaje", mData);
+  const extrasTotal = (params.extras || []).filter(ex => extraAplica(ex, mData.mes)).reduce((acc, ex) => acc + (Number(ex.importe) || 0), 0);
   ocasional += extrasTotal;
 
   const totalFijosOcasional = fijosEsenciales + subsPelu + inversion + ahorroFijo + ocasional;
-  const ocioPresupuestado = Math.min(salario, params.salarioBase) - totalFijosOcasional;
-  const extraSantander = Math.max(salario - params.salarioBase, 0);
+  const ocioPresupuestado = Math.min(salario, pv("salarioBase", mData)) - totalFijosOcasional;
+  const extraSantander = Math.max(salario - pv("salarioBase", mData), 0);
 
   const ajusteOcio = (mData.ajusteOcio === null || mData.ajusteOcio === undefined || mData.ajusteOcio === "") ? 0 : Number(mData.ajusteOcio);
   const ocioRealGastado = ocioPresupuestado + ajusteOcio;
 
   const ajusteGasolina = (mData.ajusteGasolina === null || mData.ajusteGasolina === undefined || mData.ajusteGasolina === "") ? 0 : Number(mData.ajusteGasolina);
-  const gastoRealGasolina = params.gasolina + ajusteGasolina;
+  const gastoRealGasolina = pv("gasolina", mData) + ajusteGasolina;
   const ajusteCompra = (mData.ajusteCompra === null || mData.ajusteCompra === undefined || mData.ajusteCompra === "") ? 0 : Number(mData.ajusteCompra);
-  const gastoRealCompra = params.compra + ajusteCompra;
-  const fijosEsencialesReal = params.alquiler + gastoRealCompra + gastoRealGasolina; // lo que de verdad sale por ING
+  const gastoRealCompra = pv("compra", mData) + ajusteCompra;
+  const fijosEsencialesReal = pv("alquiler", mData) + gastoRealCompra + gastoRealGasolina; // lo que de verdad sale por ING
 
   const ajusteSantander = -ajusteOcio - ajusteGasolina - ajusteCompra;
   const ingresosExtra = (mData.ingresosExtra === null || mData.ingresosExtra === undefined || mData.ingresosExtra === "") ? 0 : Number(mData.ingresosExtra);
-  const gastoExcepcional = (mData.gastoExcepcional === null || mData.gastoExcepcional === undefined || mData.gastoExcepcional === "") ? 0 : Number(mData.gastoExcepcional);
+  const listaExc = excepcionalesDe(mData);
+  const gastoExcepcional = listaExc.reduce((a, g) => a + (Number(g.importe) || 0), 0);
+  const gastoExcepcionalNota = listaExc.map(g => g.concepto).filter(Boolean).join(", ");
 
   const totalSantander = ahorroFijo + extraSantander + ajusteSantander + ingresosExtra - gastoExcepcional;
   const totalTradeRepublic = inversion;
@@ -653,7 +799,7 @@ function calcMonth(mData) {
   return {
     fijosEsenciales, fijosEsencialesReal, subsPelu, inversion, ahorroFijo, ocasional, extrasTotal,
     gastoRealGasolina, ajusteGasolina, gastoRealCompra, ajusteCompra, ingresosExtra, gastoExcepcional,
-    gastoExcepcionalNota: mData.gastoExcepcionalNota || "",
+    gastoExcepcionalNota, gastosExcepcionales: listaExc,
     totalFijosOcasional, ocioPresupuestado, extraSantander, ajuste: ajusteOcio,
     ocioRealGastado, ajusteSantander, totalSantander, totalTradeRepublic,
     totalING, comprobacion,
@@ -676,6 +822,10 @@ function render() {
   else main.innerHTML = renderAjustes();
 
   attachHandlers();
+
+  // Centra la lista de meses en el mes seleccionado (si no, parece que empieza en enero).
+  const sc = document.querySelector(".month-scroller"), pill = sc && sc.querySelector(".month-pill.active");
+  if (sc && pill) sc.scrollLeft = pill.offsetLeft - (sc.clientWidth - pill.offsetWidth) / 2;
 }
 
 function renderYearSwitch() {
@@ -696,15 +846,24 @@ function renderMensual() {
     const cls = ["month-pill"];
     if (i === activeMonthIdx) cls.push("active");
     else if (filled) cls.push("filled");
-    return `<button class="${cls.join(" ")}" data-month="${i}">${m.slice(0,3)}</button>`;
+    return `<button class="${cls.join(" ")}" data-month="${i}">${m.slice(0,3)}${monthsData[i].cerrado ? " 🔒" : ""}</button>`;
   }).join("");
 
   const mData = monthsData[activeMonthIdx];
+  const mesVacio = mData.salario === null || mData.salario === undefined || mData.salario === "";
+  const sinAjustesPropios = !mData.ajusteOcio && !mData.ajusteGasolina && !mData.ajusteCompra;
+  const { mData: prevForCopy, label: prevLabelForCopy } = getPreviousMonthInfo(activeYear, activeMonthIdx);
+  const hayAjustesQueCopiar = prevForCopy && (prevForCopy.ajusteOcio || prevForCopy.ajusteGasolina || prevForCopy.ajusteCompra);
+  const copyButtonHtml = (mesVacio && sinAjustesPropios && hayAjustesQueCopiar) ? `
+    <button class="btn secondary" id="btn-copy-prev" type="button" style="margin-bottom:14px;">📋 Copiar ajustes de ${prevLabelForCopy}</button>
+  ` : "";
 
   return `
     ${renderYearSwitch()}
     <div class="month-scroller">${pills}</div>
+    ${mData.cerrado ? `<div class="closed-banner">🔒 <span><strong>${mData.mes} está cerrado.</strong> Los importes están bloqueados para no tocarlos sin querer. Si te faltó algo, puedes reabrirlo.</span><button class="btn small" id="btn-reopen" type="button">Reabrir mes</button></div>` : ""}
     <div class="card">
+      ${copyButtonHtml}
       <div class="field">
         <label>Salario recibido en ${mData.mes}</label>
         <input type="number" inputmode="decimal" step="0.01" id="input-salario" placeholder="Ej. 1500" value="${mData.salario ?? ""}">
@@ -726,13 +885,24 @@ function renderMensual() {
         <input type="number" inputmode="decimal" step="0.01" id="input-ingresos-extra" placeholder="0" value="${mData.ingresosExtra ?? ""}">
       </div>
       <div class="field">
-        <label>Gasto excepcional <span class="hint">Algo imprevisto (reparación, multa...) · resta de Santander este mes · 0 € por defecto</span></label>
-        <input type="number" inputmode="decimal" step="0.01" id="input-gasto-excepcional" placeholder="0" value="${mData.gastoExcepcional ?? ""}">
+        <label>Gastos excepcionales <span class="hint">Imprevistos (médico, reparación, multa...) · restan de Santander este mes · puedes añadir varios</span></label>
+        ${excepcionalesDe(mData).map(g => `
+          <div class="result-row">
+            <span class="label">${escapeHtml(g.concepto || "Sin concepto")}</span>
+            <span class="value" style="display:flex; align-items:center; gap:8px;">${euro(Number(g.importe) || 0)}
+              <button class="goal-delete" data-exc-del="${g.id}" aria-label="Eliminar gasto">✕</button></span>
+          </div>`).join("")}
+        <div class="two-col" style="margin-top:8px;">
+          <input type="text" id="exc-concepto" placeholder="Concepto (Ej. Médico)">
+          <input type="number" inputmode="decimal" step="0.01" id="exc-importe" placeholder="Importe">
+        </div>
+        <button class="btn small secondary" id="btn-add-exc" style="margin-top:8px; color:var(--fg); border-color:var(--border);">+ Añadir gasto excepcional</button>
       </div>
-      <div class="field" id="gasto-excepcional-nota-wrap" style="display:${(mData.gastoExcepcional && Number(mData.gastoExcepcional) !== 0) ? "block" : "none"};">
-        <label>¿En qué? <span class="hint">Un concepto breve para recordarlo luego</span></label>
-        <input type="text" id="input-gasto-excepcional-nota" placeholder="Ej. Médico, reparación coche..." value="${mData.gastoExcepcionalNota ?? ""}">
+      <div class="field">
+        <label>Nota del mes <span class="hint">Para acordarte luego (vacaciones, cambio de seguro...) · se puede editar aunque el mes esté cerrado</span></label>
+        <textarea id="input-nota" rows="2" placeholder="Ej. Mes de vacaciones">${escapeHtml(mData.nota || "")}</textarea>
       </div>
+      ${(!mData.cerrado && !mesVacio) ? `<button class="btn" id="btn-close-month" type="button">🔒 Cerrar ${mData.mes}</button>` : ""}
     </div>
     <div id="results-container">${computeResultsHtml(mData)}</div>
   `;
@@ -752,7 +922,7 @@ function computeResultsHtml(mData) {
         <span class="value">${euro(r.fijosEsencialesReal)}</span>
       </div>
       <div class="sub-rows ${expandedFijos ? "open" : ""}" id="subrows-fijos">
-        <div class="result-row sub"><span class="label">Alquiler</span><span class="value">${euro(params.alquiler)}</span></div>
+        <div class="result-row sub"><span class="label">Alquiler</span><span class="value">${euro(pv("alquiler", mData))}</span></div>
         <div class="result-row sub"><span class="label">Compra (real este mes)</span><span class="value">${euro(r.gastoRealCompra)}</span></div>
         <div class="result-row sub"><span class="label">Gasolina (real este mes)</span><span class="value">${euro(r.gastoRealGasolina)}</span></div>
       </div>
@@ -760,19 +930,19 @@ function computeResultsHtml(mData) {
       <div class="result-row"><span class="label">Inversión automática</span><span class="value">${euro(r.inversion)}</span></div>
       <div class="result-row"><span class="label">Ahorro fijo</span><span class="value">${euro(r.ahorroFijo)}</span></div>
       <div class="result-row"><span class="label">Gastos ocasionales coche</span><span class="value">${euro(r.ocasional - r.extrasTotal)}</span></div>
-      ${(params.extras || []).length ? `
+      ${(params.extras || []).some(ex => extraAplica(ex, mData.mes)) ? `
       <div class="result-row expandable-head" id="toggle-extras">
         <span class="label">Gastos personalizados <span class="arrow ${expandedExtras ? "open" : ""}">▶</span></span>
         <span class="value">${euro(r.extrasTotal)}</span>
       </div>
       <div class="sub-rows ${expandedExtras ? "open" : ""}">
-        ${(params.extras || []).map(ex => `<div class="result-row sub"><span class="label">${escapeHtml(ex.nombre)}</span><span class="value">${euro(Number(ex.importe) || 0)}</span></div>`).join("")}
+        ${(params.extras || []).filter(ex => extraAplica(ex, mData.mes)).map(ex => `<div class="result-row sub"><span class="label">${escapeHtml(ex.nombre)}</span><span class="value">${euro(Number(ex.importe) || 0)}</span></div>`).join("")}
       </div>` : ""}
       <div class="result-row"><span class="label">Ocio presupuestado</span><span class="value">${euro(r.ocioPresupuestado)}</span></div>
       <div class="result-row"><span class="label">Ocio real gastado</span><span class="value">${euro(r.ocioRealGastado)}</span></div>
       <div class="result-row"><span class="label">Extra sobre salario base</span><span class="value">${euro(r.extraSantander)}</span></div>
       <div class="result-row"><span class="label">Ingresos extra (regalos, etc.)</span><span class="value">${euro(r.ingresosExtra)}</span></div>
-      <div class="result-row"><span class="label">Gasto excepcional${r.gastoExcepcionalNota ? ` · ${escapeHtml(r.gastoExcepcionalNota)}` : ""}</span><span class="value">${euro(r.gastoExcepcional)}</span></div>
+      <div class="result-row"><span class="label">Gastos excepcionales${r.gastoExcepcionalNota ? ` · ${escapeHtml(r.gastoExcepcionalNota)}` : ""}</span><span class="value">${euro(r.gastoExcepcional)}</span></div>
     </div>
     <div class="card">
       <h3>Reparto de ${mData.mes}</h3>
@@ -834,6 +1004,7 @@ function renderResumen() {
   const saldoSantanderActual = params.saldoSantander + sumAllYears(r => r.totalSantander);
 
   return `
+    <h2 class="print-only" style="margin:0 0 10px;">Resumen ${activeYear}</h2>
     ${renderYearSwitch()}
     <div class="section-title">KPIs del año${count < 12 ? ` (${count} de 12 meses)` : ""}</div>
     <div class="kpi-grid">
@@ -843,6 +1014,21 @@ function renderResumen() {
       <div class="kpi"><div class="big">${euro(ocioMedio)}</div><div class="lbl">Ocio presupuestado medio/mes</div></div>
       <div class="kpi"><div class="big">${euro0(santanderTotal)}</div><div class="lbl">Enviado a Santander (año)</div></div>
       <div class="kpi"><div class="big">${mesesColchon.toLocaleString("es-ES",{maximumFractionDigits:1})} meses</div><div class="lbl">Colchón CAJA 7 cubre</div></div>
+    </div>
+
+    <div class="section-title">Enviado a Santander mes a mes</div>
+    <div class="card">
+      ${renderEvolutionChart(filled)}
+    </div>
+
+    <div class="section-title">¿Dónde se va tu dinero?</div>
+    <div class="card">
+      ${renderCategoryBreakdown(filled)}
+    </div>
+
+    <div class="section-title">Previsión</div>
+    <div class="card">
+      ${renderForecast(saldoSantanderActual)}
     </div>
 
     <div class="section-title">Saldos acumulados</div>
@@ -865,7 +1051,110 @@ function renderResumen() {
     <div class="card">
       ${renderGoalsSection(saldoSantanderActual)}
     </div>
+
+    <button class="btn no-print" id="btn-print">🖨️ Imprimir / guardar resumen de ${activeYear} en PDF</button>
+    <p class="no-print" style="font-size:11px; color:var(--light-gray); margin:6px 0 0; text-align:center;">En el diálogo de impresión elige "Guardar como PDF".</p>
   `;
+}
+
+function renderEvolutionChart(filled) {
+  const vals = filled.map(r => r ? r.totalSantander : null);
+  if (!vals.some(v => v !== null)) {
+    return `<p style="font-size:13px; color:var(--gray); margin:0;">Aún no hay meses con datos en ${activeYear}.</p>`;
+  }
+  const nums = vals.filter(v => v !== null);
+  const maxV = Math.max(0, ...nums);
+  const minV = Math.min(0, ...nums);
+  const range = (maxV - minV) || 1;
+  const W = 320, top = 18, bottom = 128, H = bottom - top;
+  const slot = W / 12, barW = slot * 0.62;
+  const zeroY = top + (maxV / range) * H;
+  let bars = "";
+  vals.forEach((v, i) => {
+    const x = i * slot + (slot - barW) / 2;
+    const cx = i * slot + slot / 2;
+    if (v !== null) {
+      const h = Math.max(1.5, (Math.abs(v) / range) * H);
+      const y = v >= 0 ? zeroY - h : zeroY;
+      const color = v >= 0 ? "var(--teal)" : "var(--red)";
+      const labelY = v >= 0 ? y - 3 : y + h + 9;
+      bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="2" style="fill:${color}"/>`;
+      bars += `<text x="${cx.toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="middle" style="font-size:8px; fill:var(--gray); font-weight:700;">${Math.round(v)}</text>`;
+    }
+    bars += `<text x="${cx.toFixed(1)}" y="146" text-anchor="middle" style="font-size:8px; fill:var(--light-gray);">${MONTHS[i].slice(0,3)}</text>`;
+  });
+  return `
+    <svg viewBox="0 0 ${W} 152" width="100%" role="img" aria-label="Enviado a Santander cada mes de ${activeYear}">
+      <line x1="0" y1="${zeroY.toFixed(1)}" x2="${W}" y2="${zeroY.toFixed(1)}" style="stroke:var(--border); stroke-width:1;"/>
+      ${bars}
+    </svg>
+  `;
+}
+
+function projectedMonth(year, idx) {
+  const base = { mes: MONTHS[idx], _anio: year };
+  return calcMonth({ ...base, salario: pv("salarioBase", base), gastosExcepcionales: [] });
+}
+function addMonths(year, idx, n) { const t = year * 12 + idx + n; return [Math.floor(t / 12), t % 12]; }
+// Para cada objetivo: 0 = ya alcanzado, clave AAAAMM = mes previsto, null = no llega en 10 años.
+function computeGoalETAs(saldoSanNow) {
+  const hoy = new Date(), y0 = hoy.getFullYear(), m0 = hoy.getMonth();
+  const isFilled = (y, i) => { const arr = monthsDataByYear[String(y)]; return arr && calcMonth(arr[i]); };
+  const targets = []; let acc = 0; goals.forEach(g => { acc += g.meta; targets.push(acc); });
+  const eta = goals.map((g, i) => saldoSanNow >= targets[i] ? 0 : null);
+  let san = saldoSanNow;
+  for (let k = 0; k < 120 && eta.some(e => e === null); k++) {
+    const [y, i] = addMonths(y0, m0, k);
+    if (!isFilled(y, i)) san += projectedMonth(y, i).totalSantander;
+    goals.forEach((g, gi) => { if (eta[gi] === null && san >= targets[gi]) eta[gi] = periodKey(y, i); });
+  }
+  return eta;
+}
+function etaTexto(e) { return e === 0 ? "✅ ya alcanzado" : e ? periodoTexto(e) : "no llegas con este ritmo"; }
+
+function renderForecast(saldoSanNow) {
+  const hoy = new Date(), y0 = hoy.getFullYear(), m0 = hoy.getMonth();
+  const saldoTRNow = params.saldoTradeRepublic + sumAllYears(r => r.totalTradeRepublic);
+  const isFilled = (y, i) => { const arr = monthsDataByYear[String(y)]; return arr && calcMonth(arr[i]); };
+  let san = saldoSanNow, tr = saldoTRNow, decSan = null, decTR = null;
+  for (let k = 0; k < 120; k++) {
+    const [y, i] = addMonths(y0, m0, k);
+    if (y > activeYear) break;
+    if (!isFilled(y, i)) { const r = projectedMonth(y, i); san += r.totalSantander; tr += r.totalTradeRepublic; }
+    if (y === activeYear && i === 11) { decSan = san; decTR = tr; }
+  }
+  const eta = computeGoalETAs(saldoSanNow);
+  const lineas = [];
+  if (decSan !== null) {
+    lineas.push(`<div class="result-row"><span class="label">Santander a diciembre ${activeYear}</span><span class="value">${euro0(decSan)}</span></div>`);
+    lineas.push(`<div class="result-row"><span class="label">Trade Republic a diciembre ${activeYear}</span><span class="value">${euro0(decTR)}</span></div>`);
+  }
+  goals.forEach((g, gi) => {
+    lineas.push(`<div class="result-row"><span class="label">${escapeHtml(g.nombre)}</span><span class="value">${etaTexto(eta[gi])}</span></div>`);
+  });
+  if (!lineas.length) return `<p style="font-size:13px; color:var(--gray); margin:0;">Nada que prever para ${activeYear}.</p>`;
+  return lineas.join("") + `<p style="font-size:11px; color:var(--light-gray); margin:8px 0 0;">Supone que los meses sin rellenar cobras tu salario base, sin ajustes, ingresos extra ni gastos excepcionales. Los objetivos se reparten por orden de creación.</p>`;
+}
+
+function renderCategoryBreakdown(filled) {
+  const sum = fn => filled.reduce((a, r) => r ? a + fn(r) : a, 0);
+  const cats = [
+    { n: "Fijos esenciales (alquiler, compra, gasolina)", v: sum(r => r.fijosEsencialesReal), c: "var(--navy)" },
+    { n: "Suscripciones y peluquería", v: sum(r => r.subsPelu), c: "var(--teal)" },
+    { n: "Coche (seguro, ITV)", v: sum(r => r.ocasional - r.extrasTotal), c: "var(--gold)" },
+    { n: "Tus gastos personalizados", v: sum(r => r.extrasTotal), c: "var(--ice)" },
+    { n: "Ocio", v: sum(r => Math.max(0, r.ocioRealGastado)), c: "var(--light-gray)" },
+    { n: "Gastos excepcionales", v: sum(r => r.gastoExcepcional), c: "var(--red)" },
+    { n: "Inversión (Trade Republic)", v: sum(r => r.inversion), c: "var(--teal)" },
+  ].filter(c => c.v > 0.005);
+  const total = cats.reduce((a, c) => a + c.v, 0);
+  if (!total) return `<p style="font-size:13px; color:var(--gray); margin:0;">Aún no hay meses con datos en ${activeYear}.</p>`;
+  const max = Math.max(...cats.map(c => c.v));
+  return cats.sort((a, b) => b.v - a.v).map(c => `
+    <div class="cat-row">
+      <div class="cat-head"><span>${c.n}</span><span class="cat-val">${euro0(c.v)} · ${(c.v / total * 100).toFixed(0)}%</span></div>
+      <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${(c.v / max * 100).toFixed(1)}%; background:${c.c};"></div></div>
+    </div>`).join("") + `<p style="font-size:11px; color:var(--light-gray); margin:6px 0 0;">Porcentaje sobre lo que sale por ING y Trade Republic en los meses rellenados de ${activeYear}.</p>`;
 }
 
 function renderOverspendList(filled) {
@@ -897,9 +1186,24 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 }
 
+function goalPaceHtml(g, asignado, eta, hoyD) {
+  if (!g.fecha) return "";
+  const [fy, fm] = g.fecha.split("-").map(Number);
+  const dKey = fy * 100 + fm;
+  const falta = Math.max(0, g.meta - asignado);
+  if (falta <= 0) return `<div class="goal-pace ok">✅ Objetivo conseguido</div>`;
+  const meses = (fy * 12 + (fm - 1)) - (hoyD.getFullYear() * 12 + hoyD.getMonth()) + 1;
+  if (meses <= 0) return `<div class="goal-pace bad">⚠️ La fecha ya pasó y te faltan ${euro0(falta)}</div>`;
+  const mensual = Math.ceil(falta / meses);
+  const enTiempo = eta !== null && eta <= dKey;
+  return `<div class="goal-pace ${enTiempo ? "ok" : "bad"}">Para llegar a ${periodoTexto(dKey)} tendrías que apartar <strong>${euro0(mensual)}/mes</strong> (${meses} ${meses === 1 ? "mes" : "meses"}).<br>${enTiempo ? "✅ Vas bien" : "⚠️ Vas tarde"} · previsto: ${etaTexto(eta)}</div>`;
+}
+
 function renderGoalsSection(saldoActual) {
   let remaining = saldoActual;
-  const cards = goals.map(g => {
+  const etas = computeGoalETAs(saldoActual);
+  const hoyD = new Date();
+  const cards = goals.map((g, gi) => {
     const asignado = Math.max(0, Math.min(g.meta, remaining));
     remaining -= asignado;
     const pctVal = g.meta > 0 ? Math.min(100, (asignado / g.meta) * 100) : 0;
@@ -912,6 +1216,10 @@ function renderGoalsSection(saldoActual) {
         </div>
         <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:${pctVal}%"></div></div>
         <div class="goal-sub">${euro0(asignado)} de ${euro0(g.meta)} · ${pctVal.toFixed(0)}%</div>
+        <div class="goal-date-row">
+          <label>Fecha meta <input type="month" data-goal-date="${g.id}" value="${g.fecha || ""}"></label>
+        </div>
+        ${goalPaceHtml(g, asignado, etas[gi], hoyD)}
       </div>
     `;
   }).join("");
@@ -920,6 +1228,7 @@ function renderGoalsSection(saldoActual) {
     <div class="goal-form">
       <input type="text" id="new-goal-name" placeholder="Nombre del objetivo (ej. PS5)">
       <input type="number" step="0.01" id="new-goal-amount" placeholder="Importe objetivo (€)">
+      <label style="display:block; font-size:12px; color:var(--gray); margin:2px 0 8px; font-weight:600;">Fecha meta (opcional) <input type="month" id="new-goal-date" style="margin-top:4px;"></label>
       <div class="two-col" style="margin-top:8px;">
         <button class="btn small" id="btn-save-goal">Guardar</button>
         <button class="btn small secondary" id="btn-cancel-goal">Cancelar</button>
@@ -928,12 +1237,31 @@ function renderGoalsSection(saldoActual) {
   ` : `<button class="btn" id="btn-add-goal">+ Nuevo objetivo</button>`;
 
   return `
-    <p style="font-size:11.5px; color:var(--light-gray); margin:0 0 12px;">Saldo actual en Santander: <strong style="color:var(--navy)">${euro0(saldoActual)}</strong>. Se reparte entre tus objetivos por orden de creación.</p>
+    <p style="font-size:11.5px; color:var(--light-gray); margin:0 0 12px;">Saldo actual en Santander: <strong style="color:var(--fg)">${euro0(saldoActual)}</strong>. Se reparte entre tus objetivos por orden de creación.</p>
     ${goals.length ? cards : `<p style="font-size:13px; color:var(--gray); margin:0 0 10px;">Aún no tienes objetivos de ahorro.</p>`}
     ${formOrButton}
   `;
 }
 
+const NOMBRES_CAMPOS = { salarioBase:"Salario base", alquiler:"Alquiler", compra:"Compra", gasolina:"Gasolina", suscripciones:"Suscripciones", peluqueria:"Peluquería", inversion:"Inversión", ahorroFijo:"Ahorro fijo", seguroCoche:"Seguro del coche", rodaje:"Rodaje / ITV" };
+function periodoTexto(key) { return MONTHS[(key % 100) - 1] + " " + Math.floor(key / 100); }
+function renderHistorialCambios() {
+  const filas = [];
+  Object.entries(params.historial || {}).forEach(([campo, h]) => {
+    h.forEach((e, i) => {
+      if (i === 0) return;
+      filas.push({ campo, desde: e.desde, antes: h[i - 1].valor, ahora: e.valor });
+    });
+  });
+  if (!filas.length) return `<p style="font-size:13px; color:var(--gray); margin:0;">Aún no has cambiado ningún importe con fecha. Cuando edites uno arriba, aparecerá aquí.</p>`;
+  filas.sort((a, b) => b.desde - a.desde);
+  return filas.map(f => `
+    <div class="result-row">
+      <span class="label">${NOMBRES_CAMPOS[f.campo] || f.campo}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400; margin-top:2px;">${euro(f.antes)} → ${euro(f.ahora)} · desde ${periodoTexto(f.desde)}</span></span>
+      <span class="value"><button class="goal-delete" data-hist-campo="${f.campo}" data-hist-desde="${f.desde}" aria-label="Deshacer cambio">↩</button></span>
+    </div>`).join("") + `<p style="font-size:11px; color:var(--light-gray); margin:8px 0 0;">↩ deshace ese cambio: los meses afectados vuelven al importe anterior.</p>`;
+}
+let efectoDesde = { mes: new Date().getMonth(), anio: new Date().getFullYear() };
 function renderAjustes() {
   const p = params;
   const monthOptions = (selected) => MONTHS.map(m => `<option value="${m}" ${m===selected?"selected":""}>${m}</option>`).join("");
@@ -958,6 +1286,13 @@ function renderAjustes() {
     </div>
 
     <div class="section-title">Gastos fijos mensuales</div>
+    <div class="card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Cuando cambies un importe de abajo (suscripciones, alquiler, inversión…), el cambio vale <strong>desde este mes</strong> en adelante. Los meses anteriores mantienen el importe que tenían.</p>
+      <div class="two-col">
+        <div class="field"><label>Aplicar cambios desde</label><select id="efecto-mes">${MONTHS.map((m,i)=>`<option value="${i}" ${i===efectoDesde.mes?"selected":""}>${m}</option>`).join("")}</select></div>
+        <div class="field"><label>Año</label><select id="efecto-anio">${[activeYear-1,activeYear,activeYear+1].map(y=>`<option value="${y}" ${y===efectoDesde.anio?"selected":""}>${y}</option>`).join("")}</select></div>
+      </div>
+    </div>
     <div class="card">
       <div class="two-col">
         <div class="field"><label>Alquiler</label><input type="number" step="0.01" id="p-alquiler" value="${p.alquiler}"></div>
@@ -989,10 +1324,10 @@ function renderAjustes() {
 
     <div class="section-title">Tus gastos personalizados</div>
     <div class="card">
-      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Añade cualquier gasto fijo mensual que no encaje arriba (gimnasio, colegio, suscripción de streaming...). Se suma cada mes a tus gastos fijos.</p>
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Añade cualquier gasto que no encaje arriba (gimnasio, colegio, una cuota anual...). Elige en qué meses se aplica: si no marcas ninguno, se suma todos los meses.</p>
       ${(p.extras || []).length ? (p.extras || []).map(ex => `
         <div class="result-row">
-          <span class="label">${escapeHtml(ex.nombre)}</span>
+          <span class="label">${escapeHtml(ex.nombre)}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400; margin-top:2px;">${extraMesesTexto(ex)}</span></span>
           <span class="value" style="display:flex; align-items:center; gap:8px;">
             ${euro(Number(ex.importe) || 0)}
             <button class="goal-delete" data-extra="${ex.id}" aria-label="Eliminar gasto">✕</button>
@@ -1001,18 +1336,32 @@ function renderAjustes() {
       `).join("") : `<p style="font-size:13px; color:var(--gray); margin:0 0 10px;">Aún no has añadido ninguno.</p>`}
       <div class="two-col" style="margin-top:10px;">
         <div class="field"><label>Nombre</label><input type="text" id="new-extra-name" placeholder="Ej. Gimnasio"></div>
-        <div class="field"><label>Importe mensual</label><input type="number" step="0.01" id="new-extra-amount" placeholder="Ej. 35"></div>
+        <div class="field"><label>Importe (por mes aplicado)</label><input type="number" step="0.01" id="new-extra-amount" placeholder="Ej. 35"></div>
+      </div>
+      <div class="field"><label>Meses en los que se aplica <span class="hint">Sin marcar = todos los meses</span></label>
+        <div class="chip-row" id="new-extra-months">
+          ${MONTHS.map(m => `<button type="button" class="chip" data-mes="${m}">${m.slice(0,3)}</button>`).join("")}
+        </div>
       </div>
       <button class="btn" id="btn-add-extra">+ Añadir gasto</button>
     </div>
 
+    <div class="section-title">Historial de cambios de importes</div>
+    <div class="card" id="hist-card">${renderHistorialCambios()}</div>
+
     <div class="section-title">Color de la app</div>
     <div class="card">
-      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Elige el tema de color. Es solo tuyo — cada persona que use la app puede elegir el suyo.</p>
+      <div class="result-row" style="margin-bottom:4px; padding-bottom:12px; border-bottom:1px dashed var(--border);">
+        <span class="label">🌙 Modo oscuro</span>
+        <button id="toggle-dark" class="dark-switch ${p.modoOscuro ? "on" : ""}" role="switch" aria-checked="${p.modoOscuro ? "true" : "false"}" aria-label="Modo oscuro">
+          <span class="dark-switch-knob"></span>
+        </button>
+      </div>
+      <p style="font-size:12.5px; color:var(--gray); margin:12px 0 10px;">Elige el tema de color. Es solo tuyo — cada persona que use la app puede elegir el suyo.</p>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         ${Object.entries(THEMES).map(([id, t]) => `
           <button data-tema="${id}" style="
-            width:52px; height:52px; border-radius:50%; border:3px solid ${p.tema===id?"var(--navy)":"transparent"};
+            width:52px; height:52px; border-radius:50%; border:3px solid ${p.tema===id?"var(--fg)":"transparent"};
             background:${t.navy}; display:flex; align-items:center; justify-content:center; padding:0;">
             ${p.tema===id ? '<span style="color:#fff; font-size:16px;">✓</span>' : ""}
           </button>
@@ -1035,6 +1384,19 @@ function attachHandlers() {
   document.querySelectorAll(".month-pill").forEach(btn => {
     btn.onclick = () => { activeMonthIdx = Number(btn.dataset.month); render(); };
   });
+
+  const copyPrevBtn = document.getElementById("btn-copy-prev");
+  if (copyPrevBtn) copyPrevBtn.onclick = () => {
+    const { mData: prev } = getPreviousMonthInfo(activeYear, activeMonthIdx);
+    if (!prev) return;
+    const cur = monthsData[activeMonthIdx];
+    // Solo copia los ajustes recurrentes; el salario, ingresos extra y gastos excepcionales no se copian.
+    cur.ajusteOcio = prev.ajusteOcio ?? null;
+    cur.ajusteGasolina = prev.ajusteGasolina ?? null;
+    cur.ajusteCompra = prev.ajusteCompra ?? null;
+    saveMonths();
+    render();
+  };
 
   const yearPrev = document.getElementById("year-prev");
   if (yearPrev) yearPrev.onclick = () => {
@@ -1099,29 +1461,48 @@ function attachHandlers() {
     };
     ingresosExtraInput.onchange = saveMonths;
   }
-  const gastoExcepcionalInput = document.getElementById("input-gasto-excepcional");
-  if (gastoExcepcionalInput) {
-    gastoExcepcionalInput.oninput = () => {
-      const v = gastoExcepcionalInput.value;
-      monthsData[activeMonthIdx].gastoExcepcional = v === "" ? null : Number(v);
-      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
-      attachResultHandlers();
-      const notaWrap = document.getElementById("gasto-excepcional-nota-wrap");
-      if (notaWrap) notaWrap.style.display = (v !== "" && Number(v) !== 0) ? "block" : "none";
-    };
-    gastoExcepcionalInput.onchange = saveMonths;
+  const notaEl = document.getElementById("input-nota");
+  if (notaEl) {
+    notaEl.oninput = () => { monthsData[activeMonthIdx].nota = notaEl.value; };
+    notaEl.onchange = saveMonths;
   }
-  const gastoExcepcionalNotaInput = document.getElementById("input-gasto-excepcional-nota");
-  if (gastoExcepcionalNotaInput) {
-    gastoExcepcionalNotaInput.oninput = () => {
-      monthsData[activeMonthIdx].gastoExcepcionalNota = gastoExcepcionalNotaInput.value;
-      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
-      attachResultHandlers();
-    };
-    gastoExcepcionalNotaInput.onchange = saveMonths;
+  const closeBtn = document.getElementById("btn-close-month");
+  if (closeBtn) closeBtn.onclick = () => { monthsData[activeMonthIdx].cerrado = true; saveMonths(); render(); };
+  const reopenBtn = document.getElementById("btn-reopen");
+  if (reopenBtn) reopenBtn.onclick = () => { monthsData[activeMonthIdx].cerrado = false; saveMonths(); render(); };
+  if (activeTab === "mensual" && monthsData[activeMonthIdx].cerrado) {
+    document.querySelectorAll("#input-salario,#input-ajuste,#input-ajuste-gasolina,#input-ajuste-compra,#input-ingresos-extra,#exc-concepto,#exc-importe,#btn-add-exc,[data-exc-del],#btn-copy-prev")
+      .forEach(el => { el.disabled = true; });
   }
+  const addExcBtn = document.getElementById("btn-add-exc");
+  if (addExcBtn) addExcBtn.onclick = () => {
+    const concepto = document.getElementById("exc-concepto").value.trim();
+    const importe = Number(document.getElementById("exc-importe").value);
+    if (!importe || importe <= 0) { alert("Escribe un importe válido."); return; }
+    const m = monthsData[activeMonthIdx];
+    m.gastosExcepcionales = [...excepcionalesDe(m).map(g => ({ ...g, id: g.id || Date.now() + Math.random() })), { id: Date.now(), concepto, importe }];
+    m.gastoExcepcional = null; m.gastoExcepcionalNota = null;
+    saveMonths(); render();
+  };
+  document.querySelectorAll("[data-exc-del]").forEach(btn => {
+    btn.onclick = () => {
+      const m = monthsData[activeMonthIdx];
+      const id = btn.dataset.excDel;
+      m.gastosExcepcionales = excepcionalesDe(m).filter(g => String(g.id) !== id);
+      m.gastoExcepcional = null; m.gastoExcepcionalNota = null;
+      saveMonths(); render();
+    };
+  });
   attachResultHandlers();
 
+  const printBtn = document.getElementById("btn-print");
+  if (printBtn) printBtn.onclick = () => { try { window.print(); } catch (e) { alert("No se pudo abrir la impresión en este dispositivo."); } };
+  document.querySelectorAll("[data-goal-date]").forEach(inp => {
+    inp.onchange = () => {
+      const g = goals.find(x => String(x.id) === inp.dataset.goalDate);
+      if (g) { g.fecha = inp.value; saveGoals(); render(); }
+    };
+  });
   const addGoalBtn = document.getElementById("btn-add-goal");
   if (addGoalBtn) addGoalBtn.onclick = () => { showAddGoalForm = true; render(); };
   const cancelGoalBtn = document.getElementById("btn-cancel-goal");
@@ -1133,7 +1514,7 @@ function attachHandlers() {
     const nombre = nameEl.value.trim();
     const meta = Number(amtEl.value);
     if (!nombre || !meta || meta <= 0) { alert("Escribe un nombre y un importe objetivo válido."); return; }
-    goals.push({ id: Date.now(), nombre, meta });
+    goals.push({ id: Date.now(), nombre, meta, fecha: (document.getElementById("new-goal-date") || {}).value || "" });
     showAddGoalForm = false;
     saveGoals();
     render();
@@ -1154,10 +1535,14 @@ function attachHandlers() {
     const nombre = nameEl.value.trim();
     const importe = Number(amtEl.value);
     if (!nombre || !importe || importe <= 0) { alert("Escribe un nombre y un importe válido."); return; }
-    params.extras = [...(params.extras || []), { id: Date.now(), nombre, importe }];
+    const meses = [...document.querySelectorAll("#new-extra-months .chip.on")].map(c => c.dataset.mes);
+    params.extras = [...(params.extras || []), { id: Date.now(), nombre, importe, meses: meses.length === 12 ? [] : meses }];
     saveParams();
     render();
   };
+  document.querySelectorAll("#new-extra-months .chip").forEach(chip => {
+    chip.onclick = () => chip.classList.toggle("on");
+  });
   document.querySelectorAll(".goal-delete[data-extra]").forEach(btn => {
     btn.onclick = () => {
       const id = Number(btn.dataset.extra);
@@ -1176,6 +1561,17 @@ function attachHandlers() {
     };
   });
 
+  const darkToggle = document.getElementById("toggle-dark");
+  if (darkToggle) {
+    darkToggle.onclick = () => {
+      params.modoOscuro = !params.modoOscuro;
+      applyDarkMode(params.modoOscuro);
+      applyTheme(params.tema);
+      saveParams();
+      render();
+    };
+  }
+
   const paramFieldMap = {
     "p-salarioBase":"salarioBase","p-saldoSantander":"saldoSantander","p-saldoTradeRepublic":"saldoTradeRepublic",
     "p-colchon":"colchon","p-alquiler":"alquiler","p-compra":"compra","p-gasolina":"gasolina",
@@ -1184,8 +1580,41 @@ function attachHandlers() {
   };
   Object.entries(paramFieldMap).forEach(([id, key]) => {
     const el = document.getElementById(id);
-    if (el) el.onchange = () => { params[key] = Number(el.value) || 0; saveParams(); };
+    if (el) el.onchange = () => {
+      const nuevo = Number(el.value) || 0;
+      if (CAMPOS_HISTORIAL.includes(key)) {
+        const desde = periodKey(efectoDesde.anio, efectoDesde.mes);
+        const h = (params.historial && params.historial[key] && params.historial[key].length)
+          ? params.historial[key].filter(e => e.desde !== desde)
+          : [{ desde: 0, valor: params[key] }];
+        if (!h.length) h.push({ desde: 0, valor: params[key] });
+        h.push({ desde, valor: nuevo });
+        h.sort((a, b) => a.desde - b.desde);
+        params.historial = { ...(params.historial || {}), [key]: h };
+        params[key] = h[h.length - 1].valor;
+      } else {
+        params[key] = nuevo;
+      }
+      saveParams();
+      const hc = document.getElementById("hist-card");
+      if (hc) { hc.innerHTML = renderHistorialCambios(); bindHistorial(); }
+    };
   });
+  function bindHistorial() { document.querySelectorAll("[data-hist-campo]").forEach(btn => {
+    btn.onclick = () => {
+      const campo = btn.dataset.histCampo, desde = Number(btn.dataset.histDesde);
+      let h = (params.historial[campo] || []).filter(e => e.desde !== desde);
+      const hist = { ...params.historial };
+      if (h.length <= 1) { delete hist[campo]; params[campo] = h.length ? h[0].valor : params[campo]; }
+      else { hist[campo] = h; params[campo] = h[h.length - 1].valor; }
+      params.historial = hist;
+      saveParams(); render();
+    };
+  }); }
+  bindHistorial();
+  const efMes = document.getElementById("efecto-mes"), efAnio = document.getElementById("efecto-anio");
+  if (efMes) efMes.onchange = () => { efectoDesde.mes = Number(efMes.value); };
+  if (efAnio) efAnio.onchange = () => { efectoDesde.anio = Number(efAnio.value); };
 
   const ms1 = document.getElementById("p-mesSeguro1");
   const ms2 = document.getElementById("p-mesSeguro2");
@@ -1248,6 +1677,20 @@ document.querySelectorAll("nav.tabbar button").forEach(btn => {
 });
 
 // ---------- Init ----------
+function irAHoy() {
+  const hoy = new Date();
+  activeYear = hoy.getFullYear();
+  monthsData = getMonthsForYear(activeYear);
+  activeMonthIdx = hoy.getMonth();
+}
+// Si dejas la app abierta y cambia el mes, al volver se abre en el mes de hoy.
+let _ultimoDia = new Date().toDateString();
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && ready && _ultimoDia !== new Date().toDateString()) {
+    _ultimoDia = new Date().toDateString();
+    irAHoy(); render();
+  }
+});
 (async function init() {
   if (FIREBASE_CONFIGURED) {
     setupAuthHandlers();
@@ -1257,6 +1700,7 @@ document.querySelectorAll("nav.tabbar button").forEach(btn => {
         currentUser = user;
         showApp();
         await loadData();
+        irAHoy();
         ready = true;
         render();
       } else {
@@ -1267,6 +1711,7 @@ document.querySelectorAll("nav.tabbar button").forEach(btn => {
     });
   } else {
     await loadData();
+    irAHoy();
     ready = true;
     render();
   }
