@@ -283,6 +283,7 @@
     background:var(--navy); color:#fff; padding:8px 16px; border-radius:999px; font-size:12px;
     opacity:0; transition:opacity .2s, transform .2s; z-index:40; pointer-events:none;
   }
+  .save-toast.error{background:var(--red); max-width:88%; text-align:center; line-height:1.35; border-radius:14px;}
   .save-toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
 
   #auth-screen{
@@ -581,7 +582,7 @@ async function storageGet(key) {
       const doc = await db.collection("presupuestos").doc(currentUser.uid).get();
       const data = doc.exists ? doc.data() : {};
       return data[key] !== undefined ? data[key] : null;
-    } catch (e) { console.error("Error leyendo de Firestore", e); return null; }
+    } catch (e) { console.error("Error leyendo de Firestore", e); cloudReadFailed = true; return null; }
   }
   if (hasClaudeStorage()) {
     try {
@@ -608,6 +609,7 @@ async function storageSet(key, value) {
 }
 
 async function loadData() {
+  cloudReadFailed = false;
   const p = await storageGet("finanzas_parametros");
   if (p) { try { params = { ...DEFAULT_PARAMS, ...JSON.parse(p) }; } catch (e) {} }
   const m = await storageGet("finanzas_meses");
@@ -631,18 +633,9 @@ async function loadData() {
 }
 
 let saveTimeout = null;
-async function saveParams() {
-  await storageSet("finanzas_parametros", JSON.stringify(params));
-  showToast();
-}
-async function saveMonths() {
-  await storageSet("finanzas_meses", JSON.stringify(monthsDataByYear));
-  showToast();
-}
-async function saveGoals() {
-  await storageSet("finanzas_objetivos", JSON.stringify(goals));
-  showToast();
-}
+async function saveParams() { return guardarClave("finanzas_parametros", JSON.stringify(params)); }
+async function saveMonths() { return guardarClave("finanzas_meses", JSON.stringify(monthsDataByYear)); }
+async function saveGoals() { return guardarClave("finanzas_objetivos", JSON.stringify(goals)); }
 
 function exportBackup() {
   try {
@@ -711,11 +704,26 @@ function exportBackup() {
     alert("No se ha podido generar el Excel. Comprueba tu conexión e inténtalo de nuevo.");
   }
 }
-function showToast() {
+function showToast(msg, isError) {
   const t = document.getElementById("toast");
+  t.textContent = msg || "Guardado";
+  t.classList.toggle("error", !!isError);
   t.classList.add("show");
   clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => t.classList.remove("show"), 1100);
+  showToast._t = setTimeout(() => t.classList.remove("show"), isError ? 5000 : 1100);
+}
+// Guarda y avisa de verdad: si la nube no lo acepta, no dice "Guardado".
+let cloudReadFailed = false, pendingSaves = 0;
+async function guardarClave(key, value) {
+  if (cloudReadFailed) {
+    showToast("⚠️ No se pudieron cargar tus datos, así que no guardo para no pisarlos. Cierra y abre la app.", true);
+    return false;
+  }
+  pendingSaves++;
+  let ok = false;
+  try { ok = await storageSet(key, value); } finally { pendingSaves--; }
+  if (ok) showToast(); else showToast("⚠️ No se ha podido guardar. Revisa tu conexión e inténtalo otra vez.", true);
+  return ok;
 }
 
 // ---------- Cálculo por mes (misma lógica que la hoja de cálculo) ----------
@@ -1710,8 +1718,17 @@ function irAHoy() {
 }
 // Si dejas la app abierta y cambia el mes, al volver se abre en el mes de hoy.
 let _ultimoDia = new Date().toDateString();
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && ready && _ultimoDia !== new Date().toDateString()) {
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState !== "visible" || !ready) return;
+  // Al volver a la app, recarga los datos de la nube (por si cambiaste algo desde otro dispositivo)
+  const el = document.activeElement;
+  const escribiendo = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT");
+  if (FIREBASE_CONFIGURED && currentUser && !pendingSaves && !escribiendo) {
+    await loadData();
+    monthsData = getMonthsForYear(activeYear);
+    render();
+  }
+  if (_ultimoDia !== new Date().toDateString()) {
     _ultimoDia = new Date().toDateString();
     irAHoy(); render();
   }

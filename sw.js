@@ -1,4 +1,4 @@
-const CACHE_NAME = "mi-presupuesto-v1";
+const CACHE_NAME = "mi-presupuesto-v2";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -17,6 +17,8 @@ self.addEventListener("activate", (event) => {
 // Así nunca ves una versión vieja "pegada" mientras tengas conexión.
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  // Solo gestiona archivos de la propia app; Firebase y demás servicios van directos a la red.
+  if (new URL(event.request.url).origin !== self.location.origin) return;
   event.respondWith(
     fetch(event.request)
       .then((response) => {
