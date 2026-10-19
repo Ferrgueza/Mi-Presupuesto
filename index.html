@@ -31,6 +31,19 @@
   .cat-head .cat-val{color:var(--gray); font-weight:600;}
   .cat-bar-bg{background:var(--offwhite); border-radius:999px; height:9px; overflow:hidden;}
   .cat-bar-fill{height:100%; border-radius:999px;}
+  .cat-edit-row{display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px dashed var(--border);}
+  .cat-edit-row select{width:auto; max-width:46%; font-size:12.5px; padding:6px 8px;}
+  .g-day{margin-bottom:12px;}
+  .g-day:last-child{margin-bottom:0;}
+  .g-day-head{display:flex; justify-content:space-between; font-size:12px; font-weight:700; color:var(--gray); text-transform:uppercase; letter-spacing:.02em; padding:4px 0 6px; border-bottom:1px solid var(--border);}
+  .g-row{display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px dashed var(--border);}
+  .g-row:last-child{border-bottom:none;}
+  .g-emoji{font-size:20px; width:26px; text-align:center;}
+  .g-main{flex:1; min-width:0; display:flex; flex-direction:column;}
+  .g-name{font-size:14px; font-weight:600; color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .g-cat{font-size:11px; color:var(--light-gray);}
+  .g-amt{font-size:14px; font-weight:700; color:var(--fg);}
+  .g-btn{font-size:16px; padding:6px 8px;}
   .goal-date-row{margin-top:8px;}
   .goal-date-row label{font-size:11.5px; color:var(--gray); font-weight:600; display:flex; align-items:center; gap:8px;}
   .goal-date-row input, #new-goal-date{font-size:13px; padding:5px 8px; border-radius:8px; border:1.5px solid var(--border); background:var(--input-bg); color:var(--fg); font-family:inherit;}
@@ -344,6 +357,7 @@
   <nav class="tabbar">
     <button data-tab="mensual" class="active"><span class="ic">📅</span>Mensual</button>
     <button data-tab="resumen"><span class="ic">📊</span>Resumen</button>
+    <button data-tab="gastos"><span class="ic">💸</span>Diario</button>
     <button data-tab="ajustes"><span class="ic">⚙️</span>Ajustes</button>
   </nav>
 </div>
@@ -463,6 +477,7 @@ const DEFAULT_PARAMS = {
   extras: [],       // gastos fijos personalizados: [{id, nombre, importe}]
   tema: "navy",      // tema de color elegido
   modoOscuro: false, // modo oscuro
+  categorias: null,  // categorías del Diario (null = las de por defecto)
   historial: {},     // cambios de importes con fecha: { campo: [{desde, valor}] }
 };
 
@@ -582,7 +597,7 @@ async function storageGet(key) {
       const doc = await db.collection("presupuestos").doc(currentUser.uid).get();
       const data = doc.exists ? doc.data() : {};
       return data[key] !== undefined ? data[key] : null;
-    } catch (e) { console.error("Error leyendo de Firestore", e); cloudReadFailed = true; return null; }
+    } catch (e) { console.error("Error leyendo de Firestore", e); cloudReadFailed = true; lastCloudError = e; return null; }
   }
   if (hasClaudeStorage()) {
     try {
@@ -598,7 +613,7 @@ async function storageSet(key, value) {
     try {
       await db.collection("presupuestos").doc(currentUser.uid).set({ [key]: value }, { merge: true });
       return true;
-    } catch (e) { console.error("Error guardando en Firestore", e); return false; }
+    } catch (e) { console.error("Error guardando en Firestore", e); lastCloudError = e; return false; }
   }
   if (hasClaudeStorage()) {
     try { await window.storage.set(key, value, false); return true; }
@@ -606,6 +621,35 @@ async function storageSet(key, value) {
   }
   try { localStorage.setItem(key, value); return true; }
   catch (e) { console.error("Error guardando en el navegador", e); return false; }
+}
+
+// Lee todas las claves que empiezan por un prefijo (una clave por año de gastos diarios).
+async function storageGetByPrefix(prefix) {
+  const out = {};
+  if (FIREBASE_CONFIGURED && currentUser) {
+    try {
+      const doc = await db.collection("presupuestos").doc(currentUser.uid).get();
+      const data = doc.exists ? doc.data() : {};
+      Object.keys(data).filter(k => k.startsWith(prefix)).forEach(k => { out[k] = data[k]; });
+    } catch (e) { console.error("Error leyendo gastos", e); cloudReadFailed = true; lastCloudError = e; }
+    return out;
+  }
+  const y0 = new Date().getFullYear();
+  for (let y = y0 - 5; y <= y0 + 1; y++) {
+    const v = await storageGet(prefix + y);
+    if (v) out[prefix + y] = v;
+  }
+  return out;
+}
+async function loadGastos() {
+  gastosByYear = {};
+  const all = await storageGetByPrefix("finanzas_gastos_");
+  Object.entries(all).forEach(([k, v]) => {
+    try { const arr = JSON.parse(v); if (Array.isArray(arr)) gastosByYear[k.replace("finanzas_gastos_", "")] = arr; } catch (e) {}
+  });
+}
+async function saveGastosYear(y) {
+  return guardarClave("finanzas_gastos_" + y, JSON.stringify(gastosByYear[y] || []));
 }
 
 async function loadData() {
@@ -628,6 +672,7 @@ async function loadData() {
   monthsData = getMonthsForYear(activeYear);
   const g = await storageGet("finanzas_objetivos");
   if (g) { try { goals = JSON.parse(g); } catch (e) {} }
+  await loadGastos();
   applyTheme(params.tema);
   applyDarkMode(!!params.modoOscuro);
 }
@@ -669,6 +714,15 @@ function exportBackup() {
     const wsMeses = XLSX.utils.json_to_sheet(mesesRows.length ? mesesRows : [{ "Año": "", "Mes": "" }]);
     XLSX.utils.book_append_sheet(wb, wsMeses, "Meses");
 
+    // --- Hoja Gastos diarios ---
+    const gastosRows = [];
+    Object.values(gastosByYear).forEach(arr => arr.forEach(g => gastosRows.push(g)));
+    gastosRows.sort((a, b) => a.fecha.localeCompare(b.fecha));
+    const wsGastos = XLSX.utils.json_to_sheet(gastosRows.length
+      ? gastosRows.map(g => ({ "Fecha": g.fecha, "Concepto": g.concepto, "Categoría": catDe(g.cat).n, "Importe": g.importe }))
+      : [{ "Fecha": "", "Concepto": "", "Categoría": "", "Importe": "" }]);
+    XLSX.utils.book_append_sheet(wb, wsGastos, "Gastos diarios");
+
     // --- Hoja Parámetros ---
     const paramRows = [
       ["Salario base de referencia", params.salarioBase],
@@ -704,25 +758,52 @@ function exportBackup() {
     alert("No se ha podido generar el Excel. Comprueba tu conexión e inténtalo de nuevo.");
   }
 }
+// Autoguardado: en el móvil el campo a veces no "termina" de editarse (no se pierde el foco),
+// así que guardamos mientras escribes, con una pequeña espera, y también al salir de la app.
+let _autosaveTimer = null;
+function scheduleAutosave() {
+  clearTimeout(_autosaveTimer);
+  _autosaveTimer = setTimeout(flushAutosave, 700);
+}
+async function flushAutosave() {
+  if (_autosaveTimer === null) return;
+  clearTimeout(_autosaveTimer); _autosaveTimer = null;
+  if (!ready) return;
+  await saveParams();
+  await saveMonths();
+}
+document.addEventListener("input", (e) => {
+  const id = e.target && e.target.id;
+  if (ready && id && /^(p-|input-)/.test(id)) scheduleAutosave();
+}, true);
 function showToast(msg, isError) {
   const t = document.getElementById("toast");
   t.textContent = msg || "Guardado";
   t.classList.toggle("error", !!isError);
   t.classList.add("show");
   clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => t.classList.remove("show"), isError ? 5000 : 1100);
+  showToast._t = setTimeout(() => t.classList.remove("show"), isError ? 12000 : 1100);
 }
 // Guarda y avisa de verdad: si la nube no lo acepta, no dice "Guardado".
-let cloudReadFailed = false, pendingSaves = 0;
+let cloudReadFailed = false, pendingSaves = 0, lastCloudError = null;
+function explicarErrorNube() {
+  const code = (lastCloudError && (lastCloudError.code || lastCloudError.message)) || "desconocido";
+  let causa = "";
+  if (/permission-denied/.test(code)) causa = "Firebase no te deja leer/escribir: revisa las Reglas de Firestore.";
+  else if (/unavailable|network|offline/.test(code)) causa = "No hay conexión con Firebase.";
+  else if (/not-found|failed-precondition/.test(code)) causa = "No se encuentra la base de datos Firestore en tu proyecto de Firebase.";
+  else if (/unauthenticated/.test(code)) causa = "La sesión ha caducado: cierra sesión y vuelve a entrar.";
+  return (causa ? causa + " " : "") + "(código: " + code + ")";
+}
 async function guardarClave(key, value) {
   if (cloudReadFailed) {
-    showToast("⚠️ No se pudieron cargar tus datos, así que no guardo para no pisarlos. Cierra y abre la app.", true);
+    showToast("⚠️ No se pudieron cargar tus datos, así que no guardo para no pisarlos. " + explicarErrorNube(), true);
     return false;
   }
   pendingSaves++;
   let ok = false;
   try { ok = await storageSet(key, value); } finally { pendingSaves--; }
-  if (ok) showToast(); else showToast("⚠️ No se ha podido guardar. Revisa tu conexión e inténtalo otra vez.", true);
+  if (ok) showToast(); else showToast("⚠️ No se ha podido guardar. " + explicarErrorNube(), true);
   return ok;
 }
 
@@ -831,7 +912,8 @@ function calcMonth(mData) {
 function render() {
   document.getElementById("header-sub").textContent =
     activeTab === "mensual" ? "Introduce tu salario del mes" :
-    activeTab === "resumen" ? "Tu año de un vistazo" : "Parámetros de tu presupuesto";
+    activeTab === "resumen" ? "Tu año de un vistazo" :
+    activeTab === "gastos" ? "Apunta cada gasto del día a día" : "Parámetros de tu presupuesto";
 
   document.querySelectorAll("nav.tabbar button").forEach(b => {
     b.classList.toggle("active", b.dataset.tab === activeTab);
@@ -840,9 +922,11 @@ function render() {
   const main = document.getElementById("main");
   if (activeTab === "mensual") main.innerHTML = renderMensual();
   else if (activeTab === "resumen") main.innerHTML = renderResumen();
+  else if (activeTab === "gastos") main.innerHTML = renderGastos();
   else main.innerHTML = renderAjustes();
 
   attachHandlers();
+  if (activeTab === "gastos") attachGastosHandlers();
 
   // Centra la lista de meses en el mes seleccionado (si no, parece que empieza en enero).
   const sc = document.querySelector(".month-scroller"), pill = sc && sc.querySelector(".month-pill.active");
@@ -1266,6 +1350,50 @@ function renderGoalsSection(saldoActual) {
 
 const NOMBRES_CAMPOS = { salarioBase:"Salario base", alquiler:"Alquiler", compra:"Compra", gasolina:"Gasolina", suscripciones:"Suscripciones", peluqueria:"Peluquería", inversion:"Inversión", ahorroFijo:"Ahorro fijo", seguroCoche:"Seguro del coche", rodaje:"Rodaje / ITV" };
 function periodoTexto(key) { return MONTHS[(key % 100) - 1] + " " + Math.floor(key / 100); }
+const AJUSTE_OPC = [["", "Ninguno"], ["ocio", "→ Ocio"], ["gasolina", "→ Gasolina"], ["compra", "→ Compra"]];
+function renderCatsEditor() {
+  return `
+    <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Tus categorías para apuntar gastos. "Va a" indica a qué ajuste de Mi Presupuesto suma cada una (Ninguno = no cuenta en ningún ajuste) cuando pulsas "Aplicar a los ajustes" en Diario.</p>
+    ${getCats().map(c => `
+      <div class="cat-edit-row">
+        <span class="g-emoji">${c.e}</span>
+        <span class="g-name" style="flex:1;">${escapeHtml(c.n)}</span>
+        <select data-cat-ajuste="${escapeHtml(c.id)}" aria-label="A qué ajuste va ${escapeHtml(c.n)}">${AJUSTE_OPC.map(([v, t]) => `<option value="${v}" ${(c.ajuste || "") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <button class="goal-delete g-btn" data-cat-del="${escapeHtml(c.id)}" aria-label="Borrar categoría">✕</button>
+      </div>`).join("")}
+    <div class="two-col" style="margin-top:12px;">
+      <div class="field"><label>Nombre</label><input type="text" class="signed-input" id="new-cat-name" placeholder="Ej. Gimnasio"></div>
+      <div class="field"><label>Emoji</label><input type="text" class="signed-input" id="new-cat-emoji" placeholder="🏋️" maxlength="4"></div>
+    </div>
+    <div class="field"><label>Va a</label><select id="new-cat-ajuste">${AJUSTE_OPC.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></div>
+    <button class="btn" id="btn-add-cat" type="button">+ Añadir categoría</button>`;
+}
+function bindCatsEditor() {
+  const card = document.getElementById("cats-card"); if (!card) return;
+  const refresh = () => { card.innerHTML = renderCatsEditor(); bindCatsEditor(); };
+  const editable = () => (params.categorias && params.categorias.length) ? params.categorias : (params.categorias = DEFAULT_CATS.map(c => ({ ...c })));
+  card.querySelectorAll("[data-cat-ajuste]").forEach(sel => sel.onchange = () => {
+    const c = editable().find(x => x.id === sel.dataset.catAjuste);
+    if (c) { if (sel.value) c.ajuste = sel.value; else delete c.ajuste; saveParams(); }
+  });
+  card.querySelectorAll("[data-cat-del]").forEach(b => b.onclick = () => {
+    const id = b.dataset.catDel;
+    const usos = Object.values(gastosByYear).flat().filter(g => g.cat === id).length;
+    if (!confirm(usos ? `Esta categoría tiene ${usos} gastos. Seguirán apuntados pero saldrán como "Sin categoría". ¿Borrarla?` : "¿Borrar esta categoría?")) return;
+    params.categorias = editable().filter(x => x.id !== id); saveParams(); refresh();
+  });
+  const add = document.getElementById("btn-add-cat");
+  if (add) add.onclick = () => {
+    const n = document.getElementById("new-cat-name").value.trim();
+    if (!n) { alert("Escribe un nombre para la categoría."); return; }
+    const lista = editable();
+    if (lista.some(c => quitaTildes(c.n) === quitaTildes(n))) { alert("Ya tienes una categoría con ese nombre."); return; }
+    let id = slugCat(n); while (lista.some(c => c.id === id)) id += "-2";
+    const c = { id, n, e: document.getElementById("new-cat-emoji").value.trim() || "🏷️" };
+    const aj = document.getElementById("new-cat-ajuste").value; if (aj) c.ajuste = aj;
+    lista.push(c); params.categorias = lista; saveParams(); refresh();
+  };
+}
 function renderHistorialCambios() {
   const filas = [];
   Object.entries(params.historial || {}).forEach(([campo, h]) => {
@@ -1366,6 +1494,9 @@ function renderAjustes() {
       </div>
       <button class="btn" id="btn-add-extra">+ Añadir gasto</button>
     </div>
+
+    <div class="section-title">Categorías del Diario</div>
+    <div class="card" id="cats-card">${renderCatsEditor()}</div>
 
     <div class="section-title">Historial de cambios de importes</div>
     <div class="card" id="hist-card">${renderHistorialCambios()}</div>
@@ -1494,6 +1625,7 @@ function attachHandlers() {
       try { const n = inp.value.length; inp.setSelectionRange(n, n); } catch (e) {}
     };
   });
+  bindCatsEditor();
   const notaEl = document.getElementById("input-nota");
   if (notaEl) {
     notaEl.oninput = () => { monthsData[activeMonthIdx].nota = notaEl.value; };
@@ -1613,7 +1745,7 @@ function attachHandlers() {
   };
   Object.entries(paramFieldMap).forEach(([id, key]) => {
     const el = document.getElementById(id);
-    if (el) el.onchange = () => {
+    if (el) el.oninput = el.onchange = () => {
       const nuevo = parseNum(el.value) || 0;
       if (CAMPOS_HISTORIAL.includes(key)) {
         const desde = periodKey(efectoDesde.anio, efectoDesde.mes);
@@ -1628,7 +1760,7 @@ function attachHandlers() {
       } else {
         params[key] = nuevo;
       }
-      saveParams();
+      scheduleAutosave();
       const hc = document.getElementById("hist-card");
       if (hc) { hc.innerHTML = renderHistorialCambios(); bindHistorial(); }
     };
@@ -1670,6 +1802,9 @@ function attachHandlers() {
     activeYear = new Date().getFullYear();
     monthsData = getMonthsForYear(activeYear);
     goals = [];
+    const anios = Object.keys(gastosByYear);
+    gastosByYear = {};
+    for (const y of anios) await guardarClave("finanzas_gastos_" + y, "[]");
     await saveParams();
     await saveMonths();
     await saveGoals();
@@ -1704,9 +1839,403 @@ function updatePillState() {
   });
 }
 
+
+// ================= GASTOS DIARIOS =================
+let gastosByYear = {};   // { "2026": [ {id, fecha:"AAAA-MM-DD", concepto, importe, cat} ] }
+const DEFAULT_CATS = [
+  { id: "compra",      n: "Compra",       e: "🛒", ajuste: "compra" },
+  { id: "comida",      n: "Comida",       e: "🍔", ajuste: "ocio" },
+  { id: "comida-curro", n: "Comida Curro", e: "🥪" },
+  { id: "gasolina",    n: "Gasolina",     e: "⛽", ajuste: "gasolina" },
+  { id: "otros",       n: "Otros",        e: "📦" },
+  { id: "parking",     n: "Parking",      e: "🅿️" },
+  { id: "cine",        n: "Cine",         e: "🎬" },
+  { id: "regalos",     n: "Regalos",      e: "🎁" },
+  { id: "bizum",       n: "Bizum",        e: "📲" },
+  { id: "transporte",  n: "Transporte",   e: "🚌" },
+  { id: "loteria",     n: "Lotería",      e: "🎟️" },
+  { id: "videojuegos", n: "Videojuegos",  e: "🕹️" },
+  { id: "ropa",        n: "Ropa",         e: "👕" },
+];
+function getCats() { return (params.categorias && params.categorias.length) ? params.categorias : DEFAULT_CATS; }
+const catDe = id => getCats().find(c => c.id === id) || { id, n: "Sin categoría", e: "📦" };
+let gastoUltimaCat = null;
+let gastosView = { y: new Date().getFullYear(), m: new Date().getMonth() };
+let gastoEditId = null, gastosFiltro = "";
+
+const p2 = n => String(n).padStart(2, "0");
+function hoyISO() { const d = new Date(); return d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate()); }
+function mesPrefijo(y, m) { return y + "-" + p2(m + 1); }
+function gastosDelMes(y, m) {
+  const k = mesPrefijo(y, m);
+  return (gastosByYear[String(y)] || []).filter(g => g.fecha.startsWith(k));
+}
+function fechaBonita(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const t = new Date(y, m - 1, d).toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" });
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+function fechaPorDefecto() {
+  const h = new Date();
+  return (gastosView.y === h.getFullYear() && gastosView.m === h.getMonth()) ? hoyISO() : mesPrefijo(gastosView.y, gastosView.m) + "-01";
+}
+function round2(n) { return Math.round(n * 100) / 100; }
+
+function sumaPorCat(lista) {
+  const t = {};
+  lista.forEach(g => { t[g.cat] = (t[g.cat] || 0) + g.importe; });
+  return t;
+}
+
+function renderGastos() {
+  const { y, m } = gastosView;
+  const lista = gastosDelMes(y, m);
+  const total = lista.reduce((a, g) => a + g.importe, 0);
+  const editando = gastoEditId ? Object.values(gastosByYear).flat().find(g => g.id === gastoEditId) : null;
+  const conceptos = [...new Set(Object.values(gastosByYear).flat().map(g => g.concepto))].slice(0, 200);
+  const porCat = sumaPorCat(lista);
+  const catsTodas = [...getCats(), ...Object.keys(porCat).filter(id => !getCats().some(c => c.id === id)).map(id => catDe(id))];
+  const cats = catsTodas.filter(c => porCat[c.id] > 0).sort((a, b) => porCat[b.id] - porCat[a.id]);
+  const maxCat = cats.length ? porCat[cats[0].id] : 1;
+
+  return `
+    <div class="year-switch">
+      <button id="g-prev" aria-label="Mes anterior">‹</button>
+      <span class="year-label">${MONTHS[m]} ${y}</span>
+      <button id="g-next" aria-label="Mes siguiente">›</button>
+    </div>
+
+    <div class="card">
+      <h3>${editando ? "Editar gasto" : "Apuntar un gasto"}</h3>
+      <div class="two-col">
+        <div class="field"><label>Importe (€)</label><input type="text" class="signed-input" inputmode="decimal" autocomplete="off" id="g-importe" placeholder="Ej. 10" value="${editando ? editando.importe : ""}"></div>
+        <div class="field"><label>Fecha</label><input type="date" class="signed-input" id="g-fecha" value="${editando ? editando.fecha : fechaPorDefecto()}"></div>
+      </div>
+      <div class="field"><label>¿En qué?</label>
+        <input type="text" class="signed-input" id="g-concepto" list="g-sugerencias" autocomplete="off" placeholder="Ej. McDonald's" value="${editando ? escapeHtml(editando.concepto) : ""}">
+        <datalist id="g-sugerencias">${conceptos.map(c => `<option value="${escapeHtml(c)}"></option>`).join("")}</datalist>
+      </div>
+      <div class="field"><label>Categoría</label>
+        <select id="g-cat">${getCats().map(c => `<option value="${c.id}" ${editando && editando.cat === c.id ? "selected" : (!editando && c.id === (gastoUltimaCat || getCats()[0].id) ? "selected" : "")}>${c.e} ${c.n}</option>`).join("")}<option value="__nueva__">➕ Nueva categoría…</option></select>
+      </div>
+      <button class="btn" id="g-add" type="button">${editando ? "Guardar cambios" : "+ Añadir gasto"}</button>
+      ${editando ? `<button class="btn secondary" id="g-cancel" type="button" style="color:var(--fg); border-color:var(--border);">Cancelar</button>` : ""}
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi"><div class="big">${euro(total)}</div><div class="lbl">Gastado en ${MONTHS[m]}</div></div>
+      <div class="kpi"><div class="big">${lista.length}</div><div class="lbl">Gastos apuntados</div></div>
+    </div>
+
+    ${cats.length ? `<div class="section-title">Por categoría</div><div class="card">${cats.map(c => `
+      <div class="cat-row">
+        <div class="cat-head"><span>${c.e} ${c.n}</span><span class="cat-val">${euro(porCat[c.id])} · ${(porCat[c.id] / total * 100).toFixed(0)}%</span></div>
+        <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${(porCat[c.id] / maxCat * 100).toFixed(1)}%; background:var(--teal);"></div></div>
+      </div>`).join("")}</div>` : ""}
+
+    ${renderAplicarAjustes(y, m, lista)}
+
+    <div class="section-title">Día a día</div>
+    <div class="card">
+      <input type="text" class="signed-input" id="g-buscar" placeholder="🔍 Buscar (ej. McDonald's)" value="${escapeHtml(gastosFiltro)}" style="margin-bottom:10px;">
+      <div id="g-lista">${renderGastosLista()}</div>
+    </div>
+
+    <div class="section-title">Importar gastos de otra app</div>
+    <div class="card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Sube el Excel exportado de tu otra app (columnas: fecha, categoría, nota, importe, Ingreso/Gasto). Solo se importan los gastos; no se duplican los que ya tengas, así que puedes repetirlo con una exportación nueva.</p>
+      <input type="file" id="g-import-file" accept=".xlsx,.xls,.csv" style="display:none;">
+      <button class="btn" id="g-import-btn" type="button">📥 Elegir archivo Excel</button>
+      <p id="g-import-msg" style="font-size:12.5px; color:var(--gray); margin:10px 0 0; display:none;"></p>
+    </div>
+    <p style="font-size:11px; color:var(--light-gray); text-align:center; margin:4px 0 0;">Las categorías se gestionan en Ajustes → Categorías del Diario.</p>
+  `;
+}
+
+function renderGastosLista() {
+  const { y, m } = gastosView;
+  const f = gastosFiltro.trim().toLowerCase();
+  let lista = gastosDelMes(y, m);
+  if (f) lista = lista.filter(g => g.concepto.toLowerCase().includes(f) || catDe(g.cat).n.toLowerCase().includes(f));
+  if (!lista.length) {
+    return `<p style="font-size:13px; color:var(--gray); margin:0;">${f ? "Ningún gasto coincide con la búsqueda." : "Aún no has apuntado gastos en " + MONTHS[m] + "."}</p>`;
+  }
+  const dias = {};
+  lista.forEach(g => { (dias[g.fecha] = dias[g.fecha] || []).push(g); });
+  const totalFiltro = lista.reduce((a, g) => a + g.importe, 0);
+  return (f ? `<p style="font-size:12.5px; color:var(--gray); margin:0 0 8px; font-weight:600;">${lista.length} resultado${lista.length === 1 ? "" : "s"} · ${euro(totalFiltro)}</p>` : "") +
+    Object.keys(dias).sort().reverse().map(fecha => {
+      const items = dias[fecha];
+      const tot = items.reduce((a, g) => a + g.importe, 0);
+      return `<div class="g-day">
+        <div class="g-day-head"><span>${fechaBonita(fecha)}</span><span>${euro(tot)}</span></div>
+        ${items.slice().sort((a, b) => b.id - a.id).map(g => `
+          <div class="g-row">
+            <span class="g-emoji">${catDe(g.cat).e}</span>
+            <span class="g-main"><span class="g-name">${escapeHtml(g.concepto)}</span><span class="g-cat">${catDe(g.cat).n}</span></span>
+            <span class="g-amt">${euro(g.importe)}</span>
+            <button class="goal-delete g-btn" data-g-edit="${g.id}" aria-label="Editar">✎</button>
+            <button class="goal-delete g-btn" data-g-del="${g.id}" aria-label="Borrar">✕</button>
+          </div>`).join("")}
+      </div>`;
+    }).join("");
+}
+
+// Calcula qué ajustes saldrían de lo apuntado (solo categorías con gastos ese mes).
+function calcAjustesDesdeGastos(y, m, lista) {
+  const mData = getMonthsForYear(y)[m];
+  const t = sumaPorCat(lista);
+  const porAjuste = { ocio: 0, gasolina: 0, compra: 0 };
+  const hay = { ocio: false, gasolina: false, compra: false };
+  getCats().forEach(c => { if (c.ajuste && t[c.id] > 0) { porAjuste[c.ajuste] += t[c.id]; hay[c.ajuste] = true; } });
+  const r = calcMonth(mData);
+  const res = [];
+  if (hay.gasolina) res.push({ campo: "ajusteGasolina", nombre: "Gasolina", gastado: porAjuste.gasolina, presup: pv("gasolina", mData) });
+  if (hay.compra) res.push({ campo: "ajusteCompra", nombre: "Compra", gastado: porAjuste.compra, presup: pv("compra", mData) });
+  if (hay.ocio && r) res.push({ campo: "ajusteOcio", nombre: "Ocio y comida fuera", gastado: porAjuste.ocio, presup: r.ocioPresupuestado });
+  res.forEach(x => { x.ajuste = round2(x.gastado - x.presup); });
+  const sinSalario = hay.ocio && !r;
+  const sinAsignar = getCats().filter(c => !c.ajuste && t[c.id] > 0).map(c => `${c.e} ${c.n} ${euro(t[c.id])}`);
+  return { mData, res, sinSalario, sinAsignar };
+}
+
+function renderAplicarAjustes(y, m, lista) {
+  if (!lista.length) return "";
+  const { mData, res, sinSalario, sinAsignar } = calcAjustesDesdeGastos(y, m, lista);
+  if (!res.length && !sinSalario) return "";
+  return `
+    <div class="section-title">Pasar a Mi Presupuesto</div>
+    <div class="card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Compara lo que has apuntado con el presupuesto de ${MONTHS[m]} y calcula los ajustes por ti. Solo toca las categorías en las que has apuntado algo. Hazlo al final del mes, cuando ya tengas apuntado todo.</p>
+      ${res.map(x => `<div class="result-row"><span class="label">${x.nombre}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400; margin-top:2px;">Gastado ${euro(x.gastado)} · presupuesto ${euro(x.presup)}</span></span><span class="value" style="color:${x.ajuste > 0 ? "var(--red)" : "var(--teal)"}">${x.ajuste > 0 ? "+" : ""}${euro(x.ajuste)}</span></div>`).join("")}
+      ${sinSalario ? `<p style="font-size:12px; color:var(--red); margin:8px 0 0;">Para calcular el ajuste de ocio, primero pon el salario de ${MONTHS[m]} en la pestaña Mensual.</p>` : ""}
+      ${sinAsignar.length ? `<p style="font-size:11.5px; color:var(--light-gray); margin:8px 0 0;">No cuentan en ningún ajuste: ${sinAsignar.join(" · ")}. Si quieres que resten, añádelos como gasto excepcional en Mensual.</p>` : ""}
+      ${mData.cerrado ? `<p style="font-size:12px; color:var(--gray); margin:8px 0 0;">🔒 ${MONTHS[m]} está cerrado: reábrelo en Mensual para poder aplicar los ajustes.</p>` : ""}
+      ${res.length ? `<button class="btn" id="g-aplicar" type="button" ${mData.cerrado ? "disabled" : ""}>Aplicar a los ajustes de ${MONTHS[m]}</button>` : ""}
+    </div>`;
+}
+
+
+// ---------- Importar gastos desde Excel (formato de apps tipo "Money Manager") ----------
+const IMPORT_EXCLUIR = ["transferencia", "actualizacion saldo", "saldo", "saldo inicial"];
+const IMPORT_AJUSTE = {
+  gasolina: "gasolina", compra: "compra",
+  comida: "ocio", "comida curro": "ocio", torti: "ocio", bebidas: "ocio", "100 montaditos": "ocio", salida: "ocio",
+  cine: "ocio", ocio: "ocio", apuestas: "ocio", loteria: "ocio", fiesta: "ocio", carnaval: "ocio",
+  videojuego: "ocio", psn: "ocio", libros: "ocio",
+};
+const IMPORT_EMOJI = {
+  comida: "🍔", "comida curro": "🥪", torti: "🌮", bebidas: "🍺", "100 montaditos": "🥖", salida: "🍻", cine: "🎬", ocio: "🎮",
+  apuestas: "🎲", loteria: "🎟️", fiesta: "🎉", carnaval: "🎭", videojuego: "🕹️", psn: "🎮", libros: "📚",
+  gasolina: "⛽", compra: "🛒", viajes: "✈️", complementos: "🎒", garage: "🔧", coche: "🚗", "hard rock": "🎸", paris: "🗼",
+  boombastic: "🎶", regalo: "🎁", suscripcion: "🔁", madrid: "🏙️", lanzarote: "🌋", ropa: "👕", mama: "💐", decathlon: "🏃",
+  flores: "🌸", dentista: "🦷", peluqueria: "💈", seguro: "🛡️", parking: "🅿️", bizum: "📲", transporte: "🚌", otros: "📦",
+};
+const quitaTildes = t => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+function slugCat(n) { return quitaTildes(n).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "cat"; }
+
+function serialAISO(v) {
+  if (typeof v === "number") return new Date(Math.floor(v - 25569) * 86400000).toISOString().slice(0, 10);
+  const m = String(v || "").match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[0];
+  const d = String(v || "").match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/);
+  return d ? `${d[3]}-${p2(d[2])}-${p2(d[1])}` : null;
+}
+
+function leerExcelGastos(wb) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const filas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  if (!filas.length) return { error: "El archivo está vacío." };
+  const cab = filas[0].map(quitaTildes);
+  const col = (...nombres) => cab.findIndex(h => nombres.some(n => h.includes(n)));
+  const cFecha = 0 + (col("periodo", "fecha") >= 0 ? col("periodo", "fecha") : 0);
+  const cCat = col("categoria"), cNota = col("nota"), cDesc = col("descripcion");
+  const cImp = col("eur") >= 0 ? col("eur") : col("importe"), cTipo = col("ingreso/gasto", "tipo");
+  if (cCat < 0 || cImp < 0 || cTipo < 0) return { error: "No reconozco las columnas. Necesito: fecha, categoría, importe e Ingreso/Gasto." };
+  const out = [], excl = { ingresos: 0, noGasto: 0, otros: 0 };
+  filas.slice(1).forEach((f, i) => {
+    const tipo = quitaTildes(f[cTipo]);
+    if (!tipo) return;
+    if (!tipo.startsWith("gasto")) { excl.ingresos++; return; }
+    const cat = String(f[cCat] || "Otros").trim();
+    if (IMPORT_EXCLUIR.includes(quitaTildes(cat))) { excl.noGasto++; return; }
+    const fecha = serialAISO(f[cFecha]), importe = Number(f[cImp]);
+    if (!fecha || !importe || importe <= 0) { excl.otros++; return; }
+    const concepto = String((cNota >= 0 && f[cNota]) || (cDesc >= 0 && f[cDesc]) || cat).trim();
+    const ms = typeof f[cFecha] === "number" ? Math.round((f[cFecha] - 25569) * 86400000) : Date.parse(fecha);
+    out.push({ id: ms + i, fecha, concepto, importe: round2(importe), catNombre: cat });
+  });
+  return { gastos: out, excl };
+}
+
+async function importarGastosArchivo(file) {
+  const msg = document.getElementById("g-import-msg");
+  const aviso = (t, color) => { msg.style.display = "block"; msg.style.color = color || "var(--gray)"; msg.textContent = t; };
+  try {
+    if (typeof XLSX === "undefined" || !XLSX.read) { aviso("No se ha cargado el lector de Excel. Comprueba tu conexión.", "var(--red)"); return; }
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const r = leerExcelGastos(wb);
+    if (r.error) { aviso(r.error, "var(--red)"); return; }
+    if (!r.gastos.length) { aviso("No he encontrado gastos para importar.", "var(--red)"); return; }
+
+    // Categorías: reutiliza las existentes por nombre y crea las que falten.
+    let cats = getCats().map(c => ({ ...c }));
+    const nuevasCats = [];
+    const idDe = {};
+    r.gastos.forEach(g => {
+      const k = quitaTildes(g.catNombre);
+      if (idDe[k]) return;
+      let c = cats.find(x => quitaTildes(x.n) === k);
+      if (!c) {
+        let id = slugCat(g.catNombre); while (cats.some(x => x.id === id)) id += "-2";
+        c = { id, n: g.catNombre, e: IMPORT_EMOJI[k] || "🏷️" };
+        if (IMPORT_AJUSTE[k]) c.ajuste = IMPORT_AJUSTE[k];
+        cats.push(c); nuevasCats.push(c);
+      }
+      idDe[k] = c.id;
+    });
+
+    // Sin duplicados
+    const clave = g => [g.fecha, g.importe, g.concepto.toLowerCase(), g.cat].join("|");
+    // Cuenta cuántos iguales hay ya guardados: así se respetan las compras idénticas repetidas el mismo día.
+    const existentes = {};
+    Object.values(gastosByYear).flat().forEach(g => { const k = clave(g); existentes[k] = (existentes[k] || 0) + 1; });
+    const nuevos = [];
+    r.gastos.forEach(g => {
+      const x = { id: g.id, fecha: g.fecha, concepto: g.concepto, importe: g.importe, cat: idDe[quitaTildes(g.catNombre)] };
+      const k = clave(x);
+      if (existentes[k] > 0) existentes[k]--; else nuevos.push(x);
+    });
+    const dup = r.gastos.length - nuevos.length;
+    if (!nuevos.length) { aviso(`Todo lo del archivo ya estaba importado (${dup} gastos repetidos).`); return; }
+    const total = nuevos.reduce((a, g) => a + g.importe, 0);
+    const txt = `Voy a importar ${nuevos.length} gastos (${euro(total)})` + (nuevasCats.length ? ` y crear ${nuevasCats.length} categorías nuevas` : "") +
+      (dup ? `. ${dup} ya estaban y se saltan` : "") + `. Se dejan fuera ${r.excl.ingresos} ingresos y ${r.excl.noGasto} movimientos de transferencia/saldo. ¿Continuar?`;
+    if (!confirm(txt)) { aviso("Importación cancelada."); return; }
+
+    const tocados = new Set();
+    nuevos.forEach(g => { const a = g.fecha.slice(0, 4); (gastosByYear[a] = gastosByYear[a] || []).push(g); tocados.add(a); });
+    if (nuevasCats.length) { params.categorias = cats; }
+    const hoyV = new Date(); gastosView = { y: hoyV.getFullYear(), m: hoyV.getMonth() };
+    render();
+    if (nuevasCats.length) await saveParams();
+    for (const a of tocados) await saveGastosYear(a);
+    const m2 = document.getElementById("g-import-msg");
+    if (m2) { m2.style.display = "block"; m2.style.color = "var(--teal)"; m2.textContent = `✅ Importados ${nuevos.length} gastos.`; }
+  } catch (e) {
+    console.error(e); aviso("No se ha podido leer el archivo: " + (e.message || e), "var(--red)");
+  }
+}
+
+function attachGastosHandlers() {
+  const go = d => {
+    let { y, m } = gastosView; m += d;
+    if (m < 0) { m = 11; y--; } else if (m > 11) { m = 0; y++; }
+    gastosView = { y, m }; gastoEditId = null; render();
+  };
+  document.getElementById("g-prev").onclick = () => go(-1);
+  document.getElementById("g-next").onclick = () => go(1);
+
+  const concepto = document.getElementById("g-concepto");
+  concepto.onchange = () => {
+    // Si ya apuntaste antes ese concepto, propone la misma categoría.
+    if (gastoEditId) return;
+    const prev = Object.values(gastosByYear).flat().filter(g => g.concepto.toLowerCase() === concepto.value.trim().toLowerCase()).pop();
+    if (prev) document.getElementById("g-cat").value = prev.cat;
+  };
+  const selCat = document.getElementById("g-cat");
+  let catAnterior = selCat.value;
+  selCat.onchange = () => {
+    if (selCat.value !== "__nueva__") { catAnterior = selCat.value; return; }
+    const n = (prompt("Nombre de la nueva categoría (ej. París):") || "").trim();
+    if (!n) { selCat.value = catAnterior; return; }
+    const lista = (params.categorias && params.categorias.length) ? params.categorias : (params.categorias = DEFAULT_CATS.map(c => ({ ...c })));
+    let c = lista.find(x => quitaTildes(x.n) === quitaTildes(n));
+    if (!c) {
+      const e = (prompt("Emoji (opcional, déjalo vacío para 🏷️):") || "").trim() || "🏷️";
+      let id = slugCat(n); while (lista.some(x => x.id === id)) id += "-2";
+      c = { id, n, e }; lista.push(c); params.categorias = lista; saveParams();
+    }
+    const opt = document.createElement("option");
+    opt.value = c.id; opt.textContent = `${c.e} ${c.n}`;
+    if (!Array.from(selCat.options).some(o => o.value === c.id)) selCat.insertBefore(opt, selCat.querySelector('[value="__nueva__"]'));
+    selCat.value = c.id; catAnterior = c.id;
+  };
+  const anadir = async () => {
+    const importe = parseNum(document.getElementById("g-importe").value);
+    const fecha = document.getElementById("g-fecha").value;
+    const cat = document.getElementById("g-cat").value;
+    if (cat === "__nueva__") { alert("Elige una categoría."); return; }
+    let texto = concepto.value.trim();
+    if (!importe || importe <= 0) { alert("Escribe un importe mayor que 0."); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) { alert("Elige una fecha."); return; }
+    if (!texto) texto = catDe(cat).n;
+    gastoUltimaCat = cat;
+    const nuevo = { id: gastoEditId || Date.now(), fecha, concepto: texto, importe: round2(importe), cat };
+    const anioNuevo = fecha.slice(0, 4);
+    const tocados = new Set([anioNuevo]);
+    if (gastoEditId) {
+      Object.keys(gastosByYear).forEach(a => {
+        const i = gastosByYear[a].findIndex(g => g.id === gastoEditId);
+        if (i >= 0) { gastosByYear[a].splice(i, 1); tocados.add(a); }
+      });
+    }
+    gastosByYear[anioNuevo] = [...(gastosByYear[anioNuevo] || []), nuevo];
+    gastoEditId = null;
+    gastosView = { y: Number(fecha.slice(0, 4)), m: Number(fecha.slice(5, 7)) - 1 };
+    render();
+    for (const a of tocados) await saveGastosYear(a);
+  };
+  document.getElementById("g-add").onclick = anadir;
+  ["g-importe", "g-concepto"].forEach(id => document.getElementById(id).addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); anadir(); } }));
+  const cancel = document.getElementById("g-cancel");
+  if (cancel) cancel.onclick = () => { gastoEditId = null; render(); };
+
+  const buscar = document.getElementById("g-buscar");
+  buscar.oninput = () => { gastosFiltro = buscar.value; document.getElementById("g-lista").innerHTML = renderGastosLista(); bindGastosLista(); };
+  bindGastosLista();
+
+  const impBtn = document.getElementById("g-import-btn"), impFile = document.getElementById("g-import-file");
+  if (impBtn) { impBtn.onclick = () => impFile.click(); impFile.onchange = () => { if (impFile.files[0]) importarGastosArchivo(impFile.files[0]); impFile.value = ""; }; }
+
+  const aplicar = document.getElementById("g-aplicar");
+  if (aplicar) aplicar.onclick = async () => {
+    const { y, m } = gastosView;
+    const { mData, res } = calcAjustesDesdeGastos(y, m, gastosDelMes(y, m));
+    if (mData.cerrado) return;
+    res.forEach(x => { mData[x.campo] = x.ajuste; });
+    getMonthsForYear(y); // asegura el año
+    render();
+    await saveMonths();
+  };
+}
+
+function bindGastosLista() {
+  document.querySelectorAll("[data-g-edit]").forEach(b => b.onclick = () => {
+    gastoEditId = Number(b.dataset.gEdit); render(); window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+  document.querySelectorAll("[data-g-del]").forEach(b => b.onclick = async () => {
+    if (!confirm("¿Borrar este gasto?")) return;
+    const id = Number(b.dataset.gDel);
+    const tocados = [];
+    Object.keys(gastosByYear).forEach(a => {
+      const n = gastosByYear[a].length;
+      gastosByYear[a] = gastosByYear[a].filter(g => g.id !== id);
+      if (gastosByYear[a].length !== n) tocados.push(a);
+    });
+    render();
+    for (const a of tocados) await saveGastosYear(a);
+  });
+}
+
 // ---------- Tabs ----------
 document.querySelectorAll("nav.tabbar button").forEach(btn => {
-  btn.addEventListener("click", () => { activeTab = btn.dataset.tab; render(); });
+  btn.addEventListener("click", () => {
+    const el = document.activeElement;
+    if (el && el.blur && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) el.blur();
+    flushAutosave();
+    activeTab = btn.dataset.tab; render();
+  });
 });
 
 // ---------- Init ----------
@@ -1715,10 +2244,13 @@ function irAHoy() {
   activeYear = hoy.getFullYear();
   monthsData = getMonthsForYear(activeYear);
   activeMonthIdx = hoy.getMonth();
+  gastosView = { y: hoy.getFullYear(), m: hoy.getMonth() };
 }
 // Si dejas la app abierta y cambia el mes, al volver se abre en el mes de hoy.
 let _ultimoDia = new Date().toDateString();
+window.addEventListener("pagehide", () => { flushAutosave(); });
 document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState === "hidden") { flushAutosave(); return; }
   if (document.visibilityState !== "visible" || !ready) return;
   // Al volver a la app, recarga los datos de la nube (por si cambiaste algo desde otro dispositivo)
   const el = document.activeElement;
