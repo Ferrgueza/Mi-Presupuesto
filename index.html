@@ -384,6 +384,8 @@ if (FIREBASE_CONFIGURED) {
   firebase.initializeApp(firebaseConfig);
   auth = firebase.auth();
   db = firebase.firestore();
+  // Modo sin conexión: guarda en el móvil y envía los cambios cuando vuelve la señal.
+  try { if (db.enablePersistence) db.enablePersistence({ synchronizeTabs: true }).catch(e => console.warn("Sin modo sin conexión:", e && e.code)); } catch (e) {}
 }
 
 function traducirErrorAuth(code) {
@@ -475,6 +477,7 @@ const DEFAULT_PARAMS = {
   saldoSantander: 0,
   saldoTradeRepublic: 0,
   extras: [],       // gastos personalizados por meses: [{id, nombre, importe, meses}]
+  abrirEnDiario: false, // abrir la app directamente en la pestaña Diario
   fijos: [],        // gastos fijos propios (todos los meses, con cambios con fecha): [{id, nombre, importe}]
   tema: "navy",      // tema de color elegido
   modoOscuro: false, // modo oscuro
@@ -618,7 +621,13 @@ async function storageGet(key) {
 async function storageSet(key, value) {
   if (FIREBASE_CONFIGURED && currentUser) {
     try {
-      await db.collection("presupuestos").doc(currentUser.uid).set({ [key]: value }, { merge: true });
+      const setP = db.collection("presupuestos").doc(currentUser.uid).set({ [key]: value }, { merge: true });
+      // Sin conexión, Firestore no responde hasta que vuelve la señal: no dejamos la app esperando.
+      const r = await Promise.race([setP.then(() => "ok"), new Promise(res => setTimeout(() => res("lento"), 6000))]);
+      if (r === "lento") {
+        setP.then(() => { if (pendingSync) showToast("☁️ Sincronizado"); }).catch(e => { lastCloudError = e; showToast("⚠️ No se pudo enviar lo guardado sin conexión. " + explicarErrorNube(), true); });
+        return "local";
+      }
       return true;
     } catch (e) { console.error("Error guardando en Firestore", e); lastCloudError = e; return false; }
   }
@@ -830,20 +839,20 @@ document.addEventListener("input", (e) => {
   const id = e.target && e.target.id;
   if (ready && id && /^(p-|input-)/.test(id)) scheduleAutosave();
 }, true);
-function showToast(msg, isError) {
+function showToast(msg, isError, ms) {
   const t = document.getElementById("toast");
   t.textContent = msg || "Guardado";
   t.classList.toggle("error", !!isError);
   t.classList.add("show");
   clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => t.classList.remove("show"), isError ? 12000 : 1100);
+  showToast._t = setTimeout(() => t.classList.remove("show"), ms || (isError ? 12000 : 1100));
 }
 // Guarda y avisa de verdad: si la nube no lo acepta, no dice "Guardado".
-let cloudReadFailed = false, pendingSaves = 0, lastCloudError = null;
+let cloudReadFailed = false, pendingSaves = 0, lastCloudError = null, pendingSync = false;
 function explicarErrorNube() {
   const code = (lastCloudError && (lastCloudError.code || lastCloudError.message)) || "desconocido";
   let causa = "";
-  if (/permission-denied/.test(code)) causa = "Firebase no te deja leer/escribir: revisa las Reglas de Firestore.";
+  if (/permission-denied/.test(code)) causa = "Firebase no te deja leer/escribir. Si es una cuenta nueva, puede que aún no esté aprobada por el administrador; si es la tuya, revisa las Reglas de Firestore.";
   else if (/unavailable|network|offline/.test(code)) causa = "No hay conexión con Firebase.";
   else if (/not-found|failed-precondition/.test(code)) causa = "No se encuentra la base de datos Firestore en tu proyecto de Firebase.";
   else if (/unauthenticated/.test(code)) causa = "La sesión ha caducado: cierra sesión y vuelve a entrar.";
@@ -857,8 +866,10 @@ async function guardarClave(key, value) {
   pendingSaves++;
   let ok = false;
   try { ok = await storageSet(key, value); } finally { pendingSaves--; }
-  if (ok) showToast(); else showToast("⚠️ No se ha podido guardar. " + explicarErrorNube(), true);
-  return ok;
+  if (ok === "local") { pendingSync = true; showToast("📴 Sin conexión estable: guardado en tu móvil. Se enviará solo cuando vuelva la señal.", false, 5000); }
+  else if (ok) { pendingSync = false; showToast(); }
+  else showToast("⚠️ No se ha podido guardar. " + explicarErrorNube(), true);
+  return !!ok;
 }
 
 // ---------- Cálculo por mes (misma lógica que la hoja de cálculo) ----------
@@ -1414,13 +1425,19 @@ function periodoTexto(key) { return MONTHS[(key % 100) - 1] + " " + Math.floor(k
 const AJUSTE_OPC = [["", "Ninguno"], ["ocio", "→ Ocio"], ["gasolina", "→ Gasolina"], ["compra", "→ Compra"]];
 function renderCatsEditor() {
   return `
-    <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Tus categorías para apuntar gastos. "Va a" indica a qué ajuste de Mi Presupuesto suma cada una (Ninguno = no cuenta en ningún ajuste) cuando pulsas "Aplicar a los ajustes" en Diario.</p>
+    <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Tus categorías para apuntar gastos. "Límite al mes" te avisa en el Diario cuando te acercas o te pasas en esa categoría. "Va a" indica a qué ajuste de Mi Presupuesto suma cada una (Ninguno = no cuenta en ningún ajuste) cuando pulsas "Aplicar a los ajustes" en Diario.</p>
     ${getCats().map(c => `
-      <div class="cat-edit-row">
+      <div style="border-bottom:1px dashed var(--border); padding-bottom:6px;">
+      <div class="cat-edit-row" style="border:none; padding-bottom:2px;">
         <span class="g-emoji">${c.e}</span>
         <span class="g-name" style="flex:1;">${escapeHtml(c.n)}</span>
         <select data-cat-ajuste="${escapeHtml(c.id)}" aria-label="A qué ajuste va ${escapeHtml(c.n)}">${AJUSTE_OPC.map(([v, t]) => `<option value="${v}" ${(c.ajuste || "") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
         <button class="goal-delete g-btn" data-cat-del="${escapeHtml(c.id)}" aria-label="Borrar categoría">✕</button>
+      </div>
+      <div class="cat-edit-row" style="border:none; padding:0 0 0 30px; font-size:12px; color:var(--gray);">
+        <span style="flex:1;">Límite al mes (opcional)</span>
+        <input type="text" class="signed-input" inputmode="decimal" autocomplete="off" data-cat-limite="${escapeHtml(c.id)}" placeholder="Sin límite" value="${c.limite ? c.limite : ""}" style="width:96px; text-align:right; padding:6px 8px; font-size:13px;"> €
+      </div>
       </div>`).join("")}
     <div class="two-col" style="margin-top:12px;">
       <div class="field"><label>Nombre</label><input type="text" class="signed-input" id="new-cat-name" placeholder="Ej. Gimnasio"></div>
@@ -1436,6 +1453,13 @@ function bindCatsEditor() {
   card.querySelectorAll("[data-cat-ajuste]").forEach(sel => sel.onchange = () => {
     const c = editable().find(x => x.id === sel.dataset.catAjuste);
     if (c) { if (sel.value) c.ajuste = sel.value; else delete c.ajuste; saveParams(); }
+  });
+  card.querySelectorAll("[data-cat-limite]").forEach(inp => inp.onchange = () => {
+    const c = editable().find(x => x.id === inp.dataset.catLimite);
+    if (!c) return;
+    const v = parseNum(inp.value);
+    if (v > 0) c.limite = round2(v); else delete c.limite;
+    saveParams();
   });
   card.querySelectorAll("[data-cat-del]").forEach(b => b.onclick = () => {
     const id = b.dataset.catDel;
@@ -1588,6 +1612,12 @@ function renderAjustes() {
 
     <div class="section-title">Historial de cambios de importes</div>
     <div class="card" id="hist-card">${renderHistorialCambios()}</div>
+
+    <div class="section-title">Al abrir la app</div>
+    <div class="card">
+      <label class="check-row" style="display:flex; gap:8px; align-items:center; font-size:14px;"><input type="checkbox" id="c-abrir-diario" ${p.abrirEnDiario ? "checked" : ""}> Abrir directamente en el Diario</label>
+      <p style="font-size:12px; color:var(--light-gray); margin:8px 0 0;">Si la usas sobre todo para apuntar gastos. Si no, se abre en Mensual, en el mes de hoy.</p>
+    </div>
 
     <div class="section-title">Color de la app</div>
     <div class="card">
@@ -1836,6 +1866,8 @@ function attachHandlers() {
       saveParams(); render();
     };
   });
+  const chkDia = document.getElementById("c-abrir-diario");
+  if (chkDia) chkDia.onchange = () => { params.abrirEnDiario = chkDia.checked; saveParams(); };
   const chkInv = document.getElementById("c-usa-inv");
   if (chkInv) chkInv.onchange = () => { params.usaInversion = chkInv.checked; saveParams(); render(); };
 
@@ -1986,6 +2018,7 @@ const DEFAULT_CATS = [
 function getCats() { return (params.categorias && params.categorias.length) ? params.categorias : DEFAULT_CATS; }
 const catDe = id => getCats().find(c => c.id === id) || { id, n: "Sin categoría", e: "📦" };
 let gastoUltimaCat = null;
+let gastosCatFiltro = null;
 let gastosView = { y: new Date().getFullYear(), m: new Date().getMonth() };
 let gastoEditId = null, gastosFiltro = "";
 
@@ -2013,6 +2046,21 @@ function sumaPorCat(lista) {
   return t;
 }
 
+// Categorías con límite propio: lo gastado en el mes frente a su límite.
+function estadoLimites(lista) {
+  const t = sumaPorCat(lista);
+  return getCats().filter(c => c.limite > 0).map(c => {
+    const g = t[c.id] || 0;
+    return { c, g, limite: c.limite, pct: g / c.limite * 100 };
+  });
+}
+function renderAvisosLimites(lista) {
+  const av = estadoLimites(lista).filter(x => x.pct >= 80).sort((a, b) => b.pct - a.pct);
+  if (!av.length) return "";
+  return av.map(x => x.pct > 100
+    ? `<div class="warn-banner">🔴 ${x.c.e} ${escapeHtml(x.c.n)}: te has pasado ${euro(x.g - x.limite)} (${euro(x.g)} de ${euro(x.limite)})</div>`
+    : `<div class="warn-banner" style="background:#FFF6D9; color:#8A6D1D; border-color:#F0DFA0;">🟡 ${x.c.e} ${escapeHtml(x.c.n)}: ${euro(x.g)} de ${euro(x.limite)} (${x.pct.toFixed(0)} %). Te quedan ${euro(x.limite - x.g)}</div>`).join("");
+}
 // «Cómo vas»: lo apuntado en el mes frente al presupuesto de cada ajuste (no cambia ningún dato).
 function renderComoVas(y, m, lista) {
   const mData = getMonthsForYear(y)[m];
@@ -2021,8 +2069,18 @@ function renderComoVas(y, m, lista) {
   getCats().forEach(c => { if (c.ajuste) { hay[c.ajuste] = true; gastado[c.ajuste] += t[c.id] || 0; } });
   const r = calcMonth(mData);
   const filas = [["gasolina", "⛽ Gasolina", pv("gasolina", mData)], ["compra", "🛒 Compra", pv("compra", mData)], ["ocio", "🎉 Ocio y comida fuera", r ? r.ocioPresupuestado : null]].filter(f => hay[f[0]]);
-  if (!filas.length) return "";
-  return `<div class="section-title">Cómo vas en ${MONTHS[m]}</div><div class="card">` + filas.map(([k, nombre, presup]) => {
+  const lims = estadoLimites(lista);
+  if (!filas.length && !lims.length) return "";
+  const limHtml = lims.map(x => {
+    const color = x.pct > 100 ? "var(--red)" : x.pct >= 80 ? "var(--gold)" : "var(--teal)";
+    const resto = x.limite - x.g;
+    return `<div class="cat-row">
+      <div class="cat-head"><span>${x.c.e} ${escapeHtml(x.c.n)} <span style="font-weight:400; color:var(--light-gray); font-size:11px;">límite</span></span><span class="cat-val">${euro(x.g)} de ${euro(x.limite)}</span></div>
+      <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${Math.min(100, x.pct).toFixed(1)}%; background:${color};"></div></div>
+      <div style="font-size:11px; color:${resto < 0 ? "var(--red)" : "var(--light-gray)"}; margin-top:3px;">${resto >= 0 ? "Te quedan " + euro(resto) : "Te has pasado " + euro(-resto)}</div>
+    </div>`;
+  }).join("");
+  return `<div class="section-title">Cómo vas en ${MONTHS[m]}</div><div class="card">` + limHtml + filas.map(([k, nombre, presup]) => {
     const g = gastado[k];
     if (presup === null) return `<div class="cat-row"><div class="cat-head"><span>${nombre}</span><span class="cat-val">${euro(g)}</span></div><div style="font-size:11px; color:var(--light-gray);">Pon el salario de ${MONTHS[m]} en Mensual para ver cuánto te queda.</div></div>`;
     if (presup <= 0) return `<div class="cat-row"><div class="cat-head"><span>${nombre}</span><span class="cat-val">${euro(g)} · sin presupuesto</span></div></div>`;
@@ -2108,6 +2166,8 @@ function renderGastos() {
       ${editando ? `<button class="btn secondary" id="g-cancel" type="button" style="color:var(--fg); border-color:var(--border);">Cancelar</button>` : ""}
     </div>
 
+    ${renderAvisosLimites(lista)}
+
     <div class="kpi-grid">
       <div class="kpi"><div class="big">${euro(total)}</div><div class="lbl">Gastado en ${MONTHS[m]}</div></div>
       <div class="kpi"><div class="big">${lista.length}</div><div class="lbl">Gastos apuntados</div></div>
@@ -2115,8 +2175,8 @@ function renderGastos() {
 
     ${renderComoVas(y, m, lista)}
 
-    ${cats.length ? `<div class="section-title">Por categoría</div><div class="card">${cats.map(c => `
-      <div class="cat-row">
+    ${cats.length ? `<div class="section-title">Por categoría <span style="font-weight:400; text-transform:none; letter-spacing:0; color:var(--light-gray); font-size:11px;">· toca una para ver sus gastos</span></div><div class="card">${cats.map(c => `
+      <div class="cat-row" data-g-catfiltro="${escapeHtml(c.id)}" style="cursor:pointer; ${gastosCatFiltro === c.id ? "background:var(--offwhite); border-radius:8px; padding:4px 6px; margin:0 -6px 10px;" : ""}">
         <div class="cat-head"><span>${c.e} ${c.n}</span><span class="cat-val">${euro(porCat[c.id])} · ${(porCat[c.id] / total * 100).toFixed(0)}%</span></div>
         <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${(porCat[c.id] / maxCat * 100).toFixed(1)}%; background:var(--teal);"></div></div>
       </div>`).join("")}</div>` : ""}
@@ -2127,6 +2187,7 @@ function renderGastos() {
 
     <div class="section-title">Día a día</div>
     <div class="card">
+      ${gastosCatFiltro ? `<div style="margin-bottom:10px;"><button type="button" id="g-quitar-filtro" class="chip on" style="display:inline-flex; gap:6px; align-items:center;">Solo ${catDe(gastosCatFiltro).e} ${escapeHtml(catDe(gastosCatFiltro).n)} ✕</button></div>` : ""}
       <input type="text" class="signed-input" id="g-buscar" placeholder="🔍 Buscar (ej. McDonald's)" value="${escapeHtml(gastosFiltro)}" style="margin-bottom:10px;">
       <div id="g-lista">${renderGastosLista()}</div>
     </div>
@@ -2146,14 +2207,15 @@ function renderGastosLista() {
   const { y, m } = gastosView;
   const f = gastosFiltro.trim().toLowerCase();
   let lista = gastosDelMes(y, m);
+  if (gastosCatFiltro) lista = lista.filter(g => g.cat === gastosCatFiltro);
   if (f) lista = lista.filter(g => g.concepto.toLowerCase().includes(f) || catDe(g.cat).n.toLowerCase().includes(f));
   if (!lista.length) {
-    return `<p style="font-size:13px; color:var(--gray); margin:0;">${f ? "Ningún gasto coincide con la búsqueda." : "Aún no has apuntado gastos en " + MONTHS[m] + "."}</p>`;
+    return `<p style="font-size:13px; color:var(--gray); margin:0;">${f || gastosCatFiltro ? "Ningún gasto coincide con el filtro." : "Aún no has apuntado gastos en " + MONTHS[m] + "."}</p>`;
   }
   const dias = {};
   lista.forEach(g => { (dias[g.fecha] = dias[g.fecha] || []).push(g); });
   const totalFiltro = lista.reduce((a, g) => a + g.importe, 0);
-  return (f ? `<p style="font-size:12.5px; color:var(--gray); margin:0 0 8px; font-weight:600;">${lista.length} resultado${lista.length === 1 ? "" : "s"} · ${euro(totalFiltro)}</p>` : "") +
+  return (f || gastosCatFiltro ? `<p style="font-size:12.5px; color:var(--gray); margin:0 0 8px; font-weight:600;">${lista.length} resultado${lista.length === 1 ? "" : "s"} · ${euro(totalFiltro)}</p>` : "") +
     Object.keys(dias).sort().reverse().map(fecha => {
       const items = dias[fecha];
       const tot = items.reduce((a, g) => a + g.importe, 0);
@@ -2321,7 +2383,7 @@ function attachGastosHandlers() {
   const go = d => {
     let { y, m } = gastosView; m += d;
     if (m < 0) { m = 11; y--; } else if (m > 11) { m = 0; y++; }
-    gastosView = { y, m }; gastoEditId = null; render();
+    gastosView = { y, m }; gastoEditId = null; gastosCatFiltro = null; render();
   };
   document.getElementById("g-prev").onclick = () => go(-1);
   document.getElementById("g-next").onclick = () => go(1);
@@ -2375,12 +2437,23 @@ function attachGastosHandlers() {
     gastosView = { y: Number(fecha.slice(0, 4)), m: Number(fecha.slice(5, 7)) - 1 };
     render();
     for (const a of tocados) await saveGastosYear(a);
+    const est = estadoLimites(gastosDelMes(gastosView.y, gastosView.m)).find(x => x.c.id === cat);
+    if (est && est.pct >= 80) {
+      showToast(est.pct > 100 ? `🔴 ${est.c.n}: te has pasado ${euro(est.g - est.limite)} del límite` : `🟡 ${est.c.n}: ${est.pct.toFixed(0)} % del límite (${euro(est.g)} de ${euro(est.limite)})`, est.pct > 100);
+    }
   };
   document.getElementById("g-add").onclick = anadir;
   ["g-importe", "g-concepto"].forEach(id => document.getElementById(id).addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); anadir(); } }));
   const cancel = document.getElementById("g-cancel");
   if (cancel) cancel.onclick = () => { gastoEditId = null; render(); };
 
+  document.querySelectorAll("[data-g-catfiltro]").forEach(el => el.onclick = () => {
+    gastosCatFiltro = gastosCatFiltro === el.dataset.gCatfiltro ? null : el.dataset.gCatfiltro;
+    render();
+    const l = document.getElementById("g-lista"); if (l && gastosCatFiltro) l.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  const quitar = document.getElementById("g-quitar-filtro");
+  if (quitar) quitar.onclick = () => { gastosCatFiltro = null; render(); };
   const buscar = document.getElementById("g-buscar");
   buscar.oninput = () => { gastosFiltro = buscar.value; document.getElementById("g-lista").innerHTML = renderGastosLista(); bindGastosLista(); };
   bindGastosLista();
@@ -2438,6 +2511,15 @@ function irAHoy() {
 }
 // Si dejas la app abierta y cambia el mes, al volver se abre en el mes de hoy.
 let _ultimoDia = new Date().toDateString();
+(function bannerSinConexion() {
+  const b = document.createElement("div");
+  b.id = "offline-banner";
+  b.textContent = "📴 Sin conexión: lo que apuntes se guarda en el móvil y se envía al volver la señal.";
+  b.style.cssText = "display:none; position:fixed; left:0; right:0; top:0; z-index:60; background:#8A6D1D; color:#fff; font-size:12px; text-align:center; padding:6px 10px;";
+  document.body.appendChild(b);
+  const act = () => { b.style.display = navigator.onLine === false ? "block" : "none"; };
+  window.addEventListener("offline", act); window.addEventListener("online", act); act();
+})();
 window.addEventListener("pagehide", () => { flushAutosave(); });
 document.addEventListener("visibilitychange", async () => {
   if (document.visibilityState === "hidden") { flushAutosave(); return; }
@@ -2445,7 +2527,7 @@ document.addEventListener("visibilitychange", async () => {
   // Al volver a la app, recarga los datos de la nube (por si cambiaste algo desde otro dispositivo)
   const el = document.activeElement;
   const escribiendo = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT");
-  if (FIREBASE_CONFIGURED && currentUser && !pendingSaves && !escribiendo) {
+  if (FIREBASE_CONFIGURED && currentUser && !pendingSaves && !escribiendo && navigator.onLine !== false) {
     await loadData();
     monthsData = getMonthsForYear(activeYear);
     render();
@@ -2465,6 +2547,7 @@ document.addEventListener("visibilitychange", async () => {
         showApp();
         await loadData();
         irAHoy();
+        if (params.abrirEnDiario) activeTab = "gastos";
         ready = true;
         render();
       } else {
@@ -2476,6 +2559,7 @@ document.addEventListener("visibilitychange", async () => {
   } else {
     await loadData();
     irAHoy();
+    if (params.abrirEnDiario) activeTab = "gastos";
     ready = true;
     render();
   }
