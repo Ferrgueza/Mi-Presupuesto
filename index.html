@@ -758,12 +758,58 @@ function exportBackup() {
     const wsGoals = XLSX.utils.json_to_sheet(goalRows.length ? goalRows : [{ "Nombre": "", "Meta (€)": "" }]);
     XLSX.utils.book_append_sheet(wb, wsGoals, "Objetivos");
 
+    // --- Hoja para poder RESTAURAR la copia (los datos exactos, en trozos por el límite de celda de Excel) ---
+    const todo = JSON.stringify({ version: 1, params, monthsDataByYear, goals, gastosByYear });
+    const trozos = [];
+    for (let i = 0; i < todo.length; i += 30000) trozos.push([trozos.length + 1, todo.slice(i, i + 30000)]);
+    const wsRest = XLSX.utils.aoa_to_sheet([["Parte", "Datos para restaurar (no editar)"], ...trozos]);
+    XLSX.utils.book_append_sheet(wb, wsRest, "Datos_restaurar");
+
     const fecha = new Date().toISOString().slice(0, 10);
     XLSX.writeFile(wb, `Backup_Presupuesto_${fecha}.xlsx`);
     showToast();
   } catch (e) {
     console.error("Error exportando backup", e);
     alert("No se ha podido generar el Excel. Comprueba tu conexión e inténtalo de nuevo.");
+  }
+}
+// Restaurar una copia de seguridad descargada con «Descargar copia de seguridad».
+async function restaurarCopia(file) {
+  const msg = document.getElementById("restore-msg");
+  const aviso = (t, color) => { if (msg) { msg.style.display = "block"; msg.style.color = color || "var(--gray)"; msg.textContent = t; } };
+  try {
+    if (typeof XLSX === "undefined" || !XLSX.read) { aviso("No se ha cargado el lector de Excel. Comprueba tu conexión.", "var(--red)"); return; }
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const ws = wb.Sheets["Datos_restaurar"];
+    if (!ws) { aviso("Este Excel no es una copia de seguridad de la app con datos para restaurar (las copias antiguas, anteriores a esta función, no se pueden restaurar).", "var(--red)"); return; }
+    const filas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" }).slice(1);
+    const texto = filas.sort((a, b) => Number(a[0]) - Number(b[0])).map(f => String(f[1] || "")).join("");
+    let d;
+    try { d = JSON.parse(texto); } catch (e) { aviso("La copia está dañada o incompleta.", "var(--red)"); return; }
+    if (!d || typeof d.params !== "object" || typeof d.monthsDataByYear !== "object" || !Array.isArray(d.goals) || typeof d.gastosByYear !== "object") {
+      aviso("La copia no tiene el formato esperado.", "var(--red)"); return;
+    }
+    const nMeses = Object.values(d.monthsDataByYear).reduce((a, arr) => a + (Array.isArray(arr) ? arr.filter(m => m && m.salario !== null && m.salario !== undefined && m.salario !== "").length : 0), 0);
+    const nGastos = Object.values(d.gastosByYear).reduce((a, arr) => a + (Array.isArray(arr) ? arr.length : 0), 0);
+    if (!confirm(`Esta copia tiene ${nMeses} meses con salario, ${nGastos} gastos del Diario y ${d.goals.length} objetivos.\n\nRestaurar SUSTITUYE todo lo que tienes ahora en la app. ¿Continuar?`)) return;
+
+    params = { ...DEFAULT_PARAMS, ...d.params };
+    monthsDataByYear = d.monthsDataByYear;
+    migrarExcepcionales();
+    goals = d.goals;
+    const aniosViejos = Object.keys(gastosByYear);
+    gastosByYear = {};
+    Object.entries(d.gastosByYear).forEach(([y, arr]) => { if (Array.isArray(arr)) gastosByYear[y] = arr; });
+    activeYear = new Date().getFullYear();
+    monthsData = getMonthsForYear(activeYear);
+    applyTheme(params.tema); applyDarkMode(!!params.modoOscuro);
+    await saveParams(); await saveMonths(); await saveGoals();
+    for (const y of new Set([...aniosViejos, ...Object.keys(gastosByYear)])) await saveGastosYear(y);
+    render();
+    showToast("Copia restaurada");
+  } catch (e) {
+    console.error("Error restaurando", e);
+    aviso("No se ha podido restaurar: " + (e && e.message ? e.message : "error desconocido"), "var(--red)");
   }
 }
 // Autoguardado: en el móvil el campo a veces no "termina" de editarse (no se pierde el foco),
@@ -1567,6 +1613,10 @@ function renderAjustes() {
     <div class="card">
       <p style="font-size:12.5px; color:var(--gray); margin:0 0 12px;">Descarga un Excel con todos tus datos tal y como están ahora mismo (meses, parámetros y objetivos). No hay backup automático real: los navegadores no permiten guardar en tus archivos sin que tú lo pidas, así que descárgalo cuando quieras tener una copia al día.</p>
       <button class="btn" id="btn-export">⬇️ Descargar copia de seguridad (Excel)</button>
+      <p style="font-size:12.5px; color:var(--gray); margin:16px 0 10px;">¿Has perdido datos? Sube una copia descargada con el botón de arriba y todo vuelve a como estaba ese día. Sustituye lo que tienes ahora.</p>
+      <input type="file" id="restore-file" accept=".xlsx" style="display:none;">
+      <button class="btn secondary" id="btn-restore" type="button" style="color:var(--fg); border-color:var(--border);">⬆️ Restaurar desde una copia (Excel)</button>
+      <p id="restore-msg" style="font-size:12.5px; margin:10px 0 0; display:none;"></p>
     </div>
 
     <button class="btn secondary" id="btn-reset">Borrar todos mis datos</button>
@@ -1864,6 +1914,8 @@ function attachHandlers() {
 
   const exportBtn = document.getElementById("btn-export");
   if (exportBtn) exportBtn.onclick = exportBackup;
+  const restBtn = document.getElementById("btn-restore"), restFile = document.getElementById("restore-file");
+  if (restBtn) { restBtn.onclick = () => restFile.click(); restFile.onchange = () => { if (restFile.files[0]) restaurarCopia(restFile.files[0]); restFile.value = ""; }; }
 
   const logoutBtn = document.getElementById("btn-logout");
   if (logoutBtn) logoutBtn.onclick = () => { if (auth) auth.signOut(); };
@@ -1961,6 +2013,66 @@ function sumaPorCat(lista) {
   return t;
 }
 
+// «Cómo vas»: lo apuntado en el mes frente al presupuesto de cada ajuste (no cambia ningún dato).
+function renderComoVas(y, m, lista) {
+  const mData = getMonthsForYear(y)[m];
+  const t = sumaPorCat(lista);
+  const gastado = { ocio: 0, gasolina: 0, compra: 0 }, hay = {};
+  getCats().forEach(c => { if (c.ajuste) { hay[c.ajuste] = true; gastado[c.ajuste] += t[c.id] || 0; } });
+  const r = calcMonth(mData);
+  const filas = [["gasolina", "⛽ Gasolina", pv("gasolina", mData)], ["compra", "🛒 Compra", pv("compra", mData)], ["ocio", "🎉 Ocio y comida fuera", r ? r.ocioPresupuestado : null]].filter(f => hay[f[0]]);
+  if (!filas.length) return "";
+  return `<div class="section-title">Cómo vas en ${MONTHS[m]}</div><div class="card">` + filas.map(([k, nombre, presup]) => {
+    const g = gastado[k];
+    if (presup === null) return `<div class="cat-row"><div class="cat-head"><span>${nombre}</span><span class="cat-val">${euro(g)}</span></div><div style="font-size:11px; color:var(--light-gray);">Pon el salario de ${MONTHS[m]} en Mensual para ver cuánto te queda.</div></div>`;
+    if (presup <= 0) return `<div class="cat-row"><div class="cat-head"><span>${nombre}</span><span class="cat-val">${euro(g)} · sin presupuesto</span></div></div>`;
+    const pct = g / presup * 100, resto = presup - g;
+    const color = pct > 100 ? "var(--red)" : pct >= 80 ? "var(--gold)" : "var(--teal)";
+    return `<div class="cat-row">
+      <div class="cat-head"><span>${nombre}</span><span class="cat-val">${euro(g)} de ${euro(presup)}</span></div>
+      <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${Math.min(100, pct).toFixed(1)}%; background:${color};"></div></div>
+      <div style="font-size:11px; color:${resto < 0 ? "var(--red)" : "var(--light-gray)"}; margin-top:3px;">${resto >= 0 ? "Te quedan " + euro(resto) : "Te has pasado " + euro(-resto)}</div>
+    </div>`;
+  }).join("") + `</div>`;
+}
+
+// Gráficos del Diario: mes a mes del año, categorías del año y conceptos que más se repiten.
+function renderGraficosGastos(y, m, lista) {
+  const todos = gastosByYear[String(y)] || [];
+  const porMes = Array(12).fill(0);
+  todos.forEach(g => { const i = Number(g.fecha.slice(5, 7)) - 1; if (i >= 0 && i < 12) porMes[i] += g.importe; });
+  const totAnio = porMes.reduce((a, b) => a + b, 0);
+  if (!totAnio) return "";
+  const maxMes = Math.max(...porMes);
+  const conDatos = porMes.filter(v => v > 0).length;
+  const columnas = `<div style="display:flex; align-items:flex-end; gap:4px; height:110px; margin-top:6px;">${porMes.map((v, i) => `
+    <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%;">
+      <div title="${MONTHS[i]}: ${euro(v)}" style="width:100%; height:${maxMes ? Math.max(v ? 3 : 0, v / maxMes * 100).toFixed(1) : 0}%; background:${i === m ? "var(--navy)" : "var(--teal)"}; opacity:${i === m ? 1 : 0.55}; border-radius:4px 4px 0 0;"></div>
+    </div>`).join("")}</div>
+    <div style="display:flex; gap:4px; margin-top:4px;">${MONTHS.map((n, i) => `<div style="flex:1; text-align:center; font-size:9.5px; color:var(--light-gray); ${i === m ? "font-weight:700; color:var(--fg);" : ""}">${n.slice(0, 1)}</div>`).join("")}</div>`;
+  const ant = m > 0 ? porMes[m - 1] : null;
+  const act = porMes[m];
+  const comp = ant !== null && ant > 0 ? `<p style="font-size:12.5px; margin:10px 0 0; color:var(--gray);">${MONTHS[m]}: <strong style="color:var(--fg)">${euro(act)}</strong> · ${MONTHS[m - 1]}: ${euro(ant)} · ${act > ant ? "🔺 " + euro(act - ant) + " más" : act < ant ? "🔻 " + euro(ant - act) + " menos" : "igual"}</p>` : "";
+  const media = `<p style="font-size:12px; margin:6px 0 0; color:var(--light-gray);">Media de los ${conDatos} mes${conDatos === 1 ? "" : "es"} con gastos: ${euro(totAnio / conDatos)} · Total ${y}: ${euro(totAnio)}</p>`;
+
+  const catAnio = sumaPorCat(todos);
+  const catsA = Object.keys(catAnio).map(id => ({ ...catDe(id), id, v: catAnio[id] })).sort((a, b) => b.v - a.v);
+  const maxC = catsA[0].v;
+  const catHtml = catsA.map(c => `<div class="cat-row">
+      <div class="cat-head"><span>${c.e} ${c.n}</span><span class="cat-val">${euro(c.v)} · ${(c.v / totAnio * 100).toFixed(0)}%</span></div>
+      <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${(c.v / maxC * 100).toFixed(1)}%; background:var(--teal);"></div></div>
+    </div>`).join("");
+
+  const porConcepto = {};
+  todos.forEach(g => { const k = g.concepto.trim().toLowerCase(); const o = porConcepto[k] || (porConcepto[k] = { n: g.concepto.trim(), v: 0, c: 0 }); o.v += g.importe; o.c++; });
+  const top = Object.values(porConcepto).sort((a, b) => b.v - a.v).slice(0, 8);
+  const topHtml = top.map(o => `<div class="result-row"><span class="label">${escapeHtml(o.n)}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400;">${o.c} vez${o.c === 1 ? "" : "es"}</span></span><span class="value">${euro(o.v)}</span></div>`).join("");
+
+  return `<div class="section-title">Mes a mes en ${y}</div><div class="card">${columnas}${comp}${media}</div>
+    <div class="section-title">Por categoría en todo ${y}</div><div class="card">${catHtml}</div>
+    <div class="section-title">Dónde más se va el dinero en ${y}</div><div class="card">${topHtml}<p style="font-size:11px; color:var(--light-gray); margin:8px 0 0;">Agrupado por lo que escribes en "¿En qué?". Escribe siempre igual el mismo sitio para que se sume.</p></div>`;
+}
+
 function renderGastos() {
   const { y, m } = gastosView;
   const lista = gastosDelMes(y, m);
@@ -2001,6 +2113,8 @@ function renderGastos() {
       <div class="kpi"><div class="big">${lista.length}</div><div class="lbl">Gastos apuntados</div></div>
     </div>
 
+    ${renderComoVas(y, m, lista)}
+
     ${cats.length ? `<div class="section-title">Por categoría</div><div class="card">${cats.map(c => `
       <div class="cat-row">
         <div class="cat-head"><span>${c.e} ${c.n}</span><span class="cat-val">${euro(porCat[c.id])} · ${(porCat[c.id] / total * 100).toFixed(0)}%</span></div>
@@ -2008,6 +2122,8 @@ function renderGastos() {
       </div>`).join("")}</div>` : ""}
 
     ${renderAplicarAjustes(y, m, lista)}
+
+    ${renderGraficosGastos(y, m, lista)}
 
     <div class="section-title">Día a día</div>
     <div class="card">
