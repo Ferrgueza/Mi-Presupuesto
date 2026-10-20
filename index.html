@@ -478,6 +478,8 @@ const DEFAULT_PARAMS = {
   tema: "navy",      // tema de color elegido
   modoOscuro: false, // modo oscuro
   categorias: null,  // categorías del Diario (null = las de por defecto)
+  cuentas: null,     // nombres de tus cuentas: {diario, inversion, ahorro}
+  usaInversion: true, // false = no tengo cuenta de inversión
   historial: {},     // cambios de importes con fecha: { campo: [{desde, valor}] }
 };
 
@@ -509,6 +511,9 @@ function applyDarkMode(on) {
 }
 
 let params = { ...DEFAULT_PARAMS };
+const CUENTAS_DEF = { diario: "ING", inversion: "Trade Republic", ahorro: "Santander" };
+const cn = k => { const c = (typeof params !== "undefined" && params && params.cuentas) || {}; return (c[k] && String(c[k]).trim()) || CUENTAS_DEF[k]; };
+const usaInv = () => !(typeof params !== "undefined" && params && params.usaInversion === false);
 function blankYearMonths() {
   return MONTHS.map(m => ({ mes: m, salario: null, ajusteOcio: null, ajusteGasolina: null, ajusteCompra: null, ingresosExtra: null, gastoExcepcional: null, gastoExcepcionalNota: null, gastosExcepcionales: [], nota: "", cerrado: false }));
 }
@@ -704,9 +709,9 @@ function exportBackup() {
           "Concepto gasto excepcional": r ? r.gastoExcepcionalNota : "",
           "Nota": m.nota || "",
           "Mes cerrado": m.cerrado ? "Sí" : "",
-          "Total → Santander": r ? r.totalSantander : "",
-          "Total → Trade Republic": r ? r.totalTradeRepublic : "",
-          "Total → ING": r ? r.totalING : "",
+          [`Total → ${cn("ahorro")}`]: r ? r.totalSantander : "",
+          ...(usaInv() ? { [`Total → ${cn("inversion")}`]: r ? r.totalTradeRepublic : "" } : {}),
+          [`Total → ${cn("diario")}`]: r ? r.totalING : "",
           "Comprobación": r ? r.comprobacion : "",
         });
       });
@@ -738,8 +743,8 @@ function exportBackup() {
       ["Rodaje / ITV (importe)", params.rodaje],
       ["Mes del rodaje", params.mesRodaje],
       ["Colchón objetivo CAJA 7", params.colchon],
-      ["Saldo inicial Santander", params.saldoSantander],
-      ["Saldo inicial Trade Republic", params.saldoTradeRepublic],
+      [`Saldo inicial ${cn("ahorro")}`, params.saldoSantander],
+      ...(usaInv() ? [[`Saldo inicial ${cn("inversion")}`, params.saldoTradeRepublic]] : []),
       ...(params.extras || []).map(e => [`Extra: ${e.nombre} (${extraMesesTexto(e)})`, e.importe]),
     ];
     const wsParams = XLSX.utils.aoa_to_sheet([["Parámetro", "Valor"], ...paramRows]);
@@ -864,7 +869,7 @@ function calcMonth(mData) {
 
   const fijosEsenciales = pv("alquiler", mData) + pv("compra", mData) + pv("gasolina", mData); // usa la gasolina presupuestada (referencia)
   const subsPelu = pv("suscripciones", mData) + pv("peluqueria", mData);
-  const inversion = pv("inversion", mData);
+  const inversion = usaInv() ? pv("inversion", mData) : 0;
   const ahorroFijo = pv("ahorroFijo", mData);
 
   let ocasional = 0;
@@ -986,11 +991,11 @@ function renderMensual() {
         <div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="input-ajuste-compra" placeholder="Ej. -20 si gastaste 80" value="${mData.ajusteCompra ?? ""}"><button type="button" class="sign-btn" data-sign="input-ajuste-compra" aria-label="Cambiar signo (más o menos)">±</button></div>
       </div>
       <div class="field">
-        <label>Ingresos extra <span class="hint">Regalos u otros ingresos puntuales · va directo a Santander · 0 € por defecto</span></label>
+        <label>Ingresos extra <span class="hint">Regalos u otros ingresos puntuales · va directo a ${cn("ahorro")} · 0 € por defecto</span></label>
         <input type="number" inputmode="decimal" step="0.01" id="input-ingresos-extra" placeholder="0" value="${mData.ingresosExtra ?? ""}">
       </div>
       <div class="field">
-        <label>Gastos excepcionales <span class="hint">Imprevistos (médico, reparación, multa...) · restan de Santander este mes · puedes añadir varios</span></label>
+        <label>Gastos excepcionales <span class="hint">Imprevistos (médico, reparación, multa...) · restan de ${cn("ahorro")} este mes · puedes añadir varios</span></label>
         ${excepcionalesDe(mData).map(g => `
           <div class="result-row">
             <span class="label">${escapeHtml(g.concepto || "Sin concepto")}</span>
@@ -1032,7 +1037,7 @@ function computeResultsHtml(mData) {
         <div class="result-row sub"><span class="label">Gasolina (real este mes)</span><span class="value">${euro(r.gastoRealGasolina)}</span></div>
       </div>
       <div class="result-row"><span class="label">Suscripciones + peluquería</span><span class="value">${euro(r.subsPelu)}</span></div>
-      <div class="result-row"><span class="label">Inversión automática</span><span class="value">${euro(r.inversion)}</span></div>
+      ${usaInv() ? `<div class="result-row"><span class="label">Inversión automática</span><span class="value">${euro(r.inversion)}</span></div>` : ""}
       <div class="result-row"><span class="label">Ahorro fijo</span><span class="value">${euro(r.ahorroFijo)}</span></div>
       <div class="result-row"><span class="label">Gastos ocasionales coche</span><span class="value">${euro(r.ocasional - r.extrasTotal)}</span></div>
       ${(params.extras || []).some(ex => extraAplica(ex, mData.mes)) ? `
@@ -1052,12 +1057,12 @@ function computeResultsHtml(mData) {
     <div class="card">
       <h3>Reparto de ${mData.mes}</h3>
       <div class="dest-grid">
-        <div class="dest-card ing"><span class="name">ING · gastos diarios</span><span class="amount">${euro0(r.totalING)}</span></div>
-        <div class="dest-card tr"><span class="name">Trade Republic · inversión</span><span class="amount">${euro0(r.totalTradeRepublic)}</span></div>
-        <div class="dest-card san ${sanNeg ? "negative" : ""}"><span class="name">Santander · ahorro</span><span class="amount">${euro0(r.totalSantander)}</span></div>
+        <div class="dest-card ing"><span class="name">${cn("diario")} · gastos diarios</span><span class="amount">${euro0(r.totalING)}</span></div>
+        ${usaInv() ? `<div class="dest-card tr"><span class="name">${cn("inversion")} · inversión</span><span class="amount">${euro0(r.totalTradeRepublic)}</span></div>` : ""}
+        <div class="dest-card san ${sanNeg ? "negative" : ""}"><span class="name">${cn("ahorro")} · ahorro</span><span class="amount">${euro0(r.totalSantander)}</span></div>
       </div>
       ${sanNeg
-        ? `<div class="warn-banner">⚠️ Este mes el sobregasto de ocio, compra, gasolina y/o un gasto excepcional supera lo que ibas a meter en Santander. Tendrás que sacar dinero de lo ya ahorrado allí.</div>`
+        ? `<div class="warn-banner">⚠️ Este mes el sobregasto de ocio, compra, gasolina y/o un gasto excepcional supera lo que ibas a meter en ${cn("ahorro")}. Tendrás que sacar dinero de lo ya ahorrado allí.</div>`
         : `<div class="ok-banner">Comprobación: ${euro(r.comprobacion)} (debe ser 0 €)</div>`}
       ${renderComparisonRow(r)}
     </div>
@@ -1070,12 +1075,12 @@ function renderComparisonRow(r) {
   if (!prevR) return "";
   const delta = r.totalSantander - prevR.totalSantander;
   if (Math.abs(delta) < 0.005) {
-    return `<div class="compare-row equal">= Igual que en ${prevLabel} (${euro0(r.totalSantander)} a Santander)</div>`;
+    return `<div class="compare-row equal">= Igual que en ${prevLabel} (${euro0(r.totalSantander)} a ${cn("ahorro")})</div>`;
   }
   const cls = delta > 0 ? "up" : "down";
   const arrow = delta > 0 ? "▲" : "▼";
   const word = delta > 0 ? "más" : "menos";
-  return `<div class="compare-row ${cls}">${arrow} ${euro(Math.abs(delta))} ${word} a Santander que en ${prevLabel}</div>`;
+  return `<div class="compare-row ${cls}">${arrow} ${euro(Math.abs(delta))} ${word} a ${cn("ahorro")} que en ${prevLabel}</div>`;
 }
 
 function renderResumen() {
@@ -1102,7 +1107,7 @@ function renderResumen() {
   MONTHS.forEach((m, i) => {
     const r = filled[i];
     if (r) { saldoSan += r.totalSantander; saldoTR += r.totalTradeRepublic; }
-    rows += `<tr><td>${m.slice(0,3)}</td><td>${r ? euro0(r.totalSantander) : "—"}</td><td>${euro0(saldoSan)}</td><td>${r ? euro0(r.totalTradeRepublic) : "—"}</td><td>${euro0(saldoTR)}</td></tr>`;
+    rows += `<tr><td>${m.slice(0,3)}</td><td>${r ? euro0(r.totalSantander) : "—"}</td><td>${euro0(saldoSan)}</td>${usaInv() ? `<td>${r ? euro0(r.totalTradeRepublic) : "—"}</td><td>${euro0(saldoTR)}</td>` : ""}</tr>`;
   });
 
   // El saldo "actual" para los objetivos es el de TODOS los años con datos, no solo el año que estás mirando.
@@ -1114,14 +1119,14 @@ function renderResumen() {
     <div class="section-title">KPIs del año${count < 12 ? ` (${count} de 12 meses)` : ""}</div>
     <div class="kpi-grid">
       <div class="kpi"><div class="big">${euro0(salarioTotal)}</div><div class="lbl">Salario total del año</div></div>
-      <div class="kpi"><div class="big">${pct(ratioInversion)}</div><div class="lbl">Tasa de inversión</div></div>
+      ${usaInv() ? `<div class="kpi"><div class="big">${pct(ratioInversion)}</div><div class="lbl">Tasa de inversión</div></div>` : ""}
       <div class="kpi"><div class="big">${pct(ratioFijos)}</div><div class="lbl">Fijos+inversión / ingresos</div></div>
       <div class="kpi"><div class="big">${euro(ocioMedio)}</div><div class="lbl">Ocio presupuestado medio/mes</div></div>
-      <div class="kpi"><div class="big">${euro0(santanderTotal)}</div><div class="lbl">Enviado a Santander (año)</div></div>
+      <div class="kpi"><div class="big">${euro0(santanderTotal)}</div><div class="lbl">Enviado a ${cn("ahorro")} (año)</div></div>
       <div class="kpi"><div class="big">${mesesColchon.toLocaleString("es-ES",{maximumFractionDigits:1})} meses</div><div class="lbl">Colchón CAJA 7 cubre</div></div>
     </div>
 
-    <div class="section-title">Enviado a Santander mes a mes</div>
+    <div class="section-title">Enviado a ${cn("ahorro")} mes a mes</div>
     <div class="card">
       ${renderEvolutionChart(filled)}
     </div>
@@ -1140,7 +1145,7 @@ function renderResumen() {
     <div class="card">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Mes</th><th>+Santander</th><th>Saldo San.</th><th>+Trade Rep.</th><th>Saldo TR</th></tr></thead>
+          <thead><tr><th>Mes</th><th>+${escapeHtml(cn("ahorro"))}</th><th>Saldo</th>${usaInv() ? `<th>+${escapeHtml(cn("inversion"))}</th><th>Saldo</th>` : ""}</tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -1152,7 +1157,7 @@ function renderResumen() {
       ${renderOverspendList(filled)}
     </div>
 
-    <div class="section-title">Objetivos en Santander</div>
+    <div class="section-title">Objetivos en ${cn("ahorro")}</div>
     <div class="card">
       ${renderGoalsSection(saldoSantanderActual)}
     </div>
@@ -1189,7 +1194,7 @@ function renderEvolutionChart(filled) {
     bars += `<text x="${cx.toFixed(1)}" y="146" text-anchor="middle" style="font-size:8px; fill:var(--light-gray);">${MONTHS[i].slice(0,3)}</text>`;
   });
   return `
-    <svg viewBox="0 0 ${W} 152" width="100%" role="img" aria-label="Enviado a Santander cada mes de ${activeYear}">
+    <svg viewBox="0 0 ${W} 152" width="100%" role="img" aria-label="Enviado a ${cn("ahorro")} cada mes de ${activeYear}">
       <line x1="0" y1="${zeroY.toFixed(1)}" x2="${W}" y2="${zeroY.toFixed(1)}" style="stroke:var(--border); stroke-width:1;"/>
       ${bars}
     </svg>
@@ -1231,8 +1236,8 @@ function renderForecast(saldoSanNow) {
   const eta = computeGoalETAs(saldoSanNow);
   const lineas = [];
   if (decSan !== null) {
-    lineas.push(`<div class="result-row"><span class="label">Santander a diciembre ${activeYear}</span><span class="value">${euro0(decSan)}</span></div>`);
-    lineas.push(`<div class="result-row"><span class="label">Trade Republic a diciembre ${activeYear}</span><span class="value">${euro0(decTR)}</span></div>`);
+    lineas.push(`<div class="result-row"><span class="label">${cn("ahorro")} a diciembre ${activeYear}</span><span class="value">${euro0(decSan)}</span></div>`);
+    if (usaInv()) lineas.push(`<div class="result-row"><span class="label">${cn("inversion")} a diciembre ${activeYear}</span><span class="value">${euro0(decTR)}</span></div>`);
   }
   goals.forEach((g, gi) => {
     lineas.push(`<div class="result-row"><span class="label">${escapeHtml(g.nombre)}</span><span class="value">${etaTexto(eta[gi])}</span></div>`);
@@ -1250,7 +1255,7 @@ function renderCategoryBreakdown(filled) {
     { n: "Tus gastos personalizados", v: sum(r => r.extrasTotal), c: "var(--ice)" },
     { n: "Ocio", v: sum(r => Math.max(0, r.ocioRealGastado)), c: "var(--light-gray)" },
     { n: "Gastos excepcionales", v: sum(r => r.gastoExcepcional), c: "var(--red)" },
-    { n: "Inversión (Trade Republic)", v: sum(r => r.inversion), c: "var(--teal)" },
+    { n: `Inversión (${cn("inversion")})`, v: sum(r => r.inversion), c: "var(--teal)" },
   ].filter(c => c.v > 0.005);
   const total = cats.reduce((a, c) => a + c.v, 0);
   if (!total) return `<p style="font-size:13px; color:var(--gray); margin:0;">Aún no hay meses con datos en ${activeYear}.</p>`;
@@ -1259,7 +1264,7 @@ function renderCategoryBreakdown(filled) {
     <div class="cat-row">
       <div class="cat-head"><span>${c.n}</span><span class="cat-val">${euro0(c.v)} · ${(c.v / total * 100).toFixed(0)}%</span></div>
       <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${(c.v / max * 100).toFixed(1)}%; background:${c.c};"></div></div>
-    </div>`).join("") + `<p style="font-size:11px; color:var(--light-gray); margin:6px 0 0;">Porcentaje sobre lo que sale por ING y Trade Republic en los meses rellenados de ${activeYear}.</p>`;
+    </div>`).join("") + `<p style="font-size:11px; color:var(--light-gray); margin:6px 0 0;">Porcentaje sobre lo que sale por ${cn("diario")}${usaInv() ? " y " + cn("inversion") : ""} en los meses rellenados de ${activeYear}.</p>`;
 }
 
 function renderOverspendList(filled) {
@@ -1342,7 +1347,7 @@ function renderGoalsSection(saldoActual) {
   ` : `<button class="btn" id="btn-add-goal">+ Nuevo objetivo</button>`;
 
   return `
-    <p style="font-size:11.5px; color:var(--light-gray); margin:0 0 12px;">Saldo actual en Santander: <strong style="color:var(--fg)">${euro0(saldoActual)}</strong>. Se reparte entre tus objetivos por orden de creación.</p>
+    <p style="font-size:11.5px; color:var(--light-gray); margin:0 0 12px;">Saldo actual en ${cn("ahorro")}: <strong style="color:var(--fg)">${euro0(saldoActual)}</strong>. Se reparte entre tus objetivos por orden de creación.</p>
     ${goals.length ? cards : `<p style="font-size:13px; color:var(--gray); margin:0 0 10px;">Aún no tienes objetivos de ahorro.</p>`}
     ${formOrButton}
   `;
@@ -1424,12 +1429,21 @@ function renderAjustes() {
 
   return `
     <div class="card" style="margin-bottom:14px;">${storageMode}</div>
+    <div class="section-title">Tus cuentas</div>
+    <div class="card" id="cuentas-card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Pon el nombre de tus cuentas. Cada una tiene un papel: la del día a día (gastos y fijos), la de ahorro (lo que sobra) y, si quieres, una de inversión.</p>
+      <div class="field"><label>Cuenta del día a día</label><input type="text" class="signed-input" id="c-diario" maxlength="30" placeholder="${CUENTAS_DEF.diario}" value="${escapeHtml((p.cuentas && p.cuentas.diario) || "")}"></div>
+      <div class="field"><label>Cuenta de ahorro</label><input type="text" class="signed-input" id="c-ahorro" maxlength="30" placeholder="${CUENTAS_DEF.ahorro}" value="${escapeHtml((p.cuentas && p.cuentas.ahorro) || "")}"></div>
+      <label class="check-row" style="display:flex; gap:8px; align-items:center; margin:6px 0 10px; font-size:14px;"><input type="checkbox" id="c-usa-inv" ${usaInv() ? "checked" : ""}> Tengo una cuenta de inversión</label>
+      ${usaInv() ? `<div class="field"><label>Cuenta de inversión</label><input type="text" class="signed-input" id="c-inversion" maxlength="30" placeholder="${CUENTAS_DEF.inversion}" value="${escapeHtml((p.cuentas && p.cuentas.inversion) || "")}"></div>` : `<p style="font-size:12px; color:var(--light-gray); margin:0;">Sin cuenta de inversión: no aparece en ningún sitio y la inversión automática cuenta como 0.</p>`}
+    </div>
+
     <div class="section-title">Salario y saldos</div>
     <div class="card">
       <div class="field"><label>Salario base de referencia</label><input type="number" step="0.01" id="p-salarioBase" value="${p.salarioBase}"></div>
       <div class="two-col">
-        <div class="field"><label>Saldo inicial Santander</label><div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="p-saldoSantander" placeholder="0" value="${p.saldoSantander}"><button type="button" class="sign-btn" data-sign="p-saldoSantander" aria-label="Cambiar signo (más o menos)">±</button></div></div>
-        <div class="field"><label>Saldo inicial Trade Republic</label><div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="p-saldoTradeRepublic" placeholder="0" value="${p.saldoTradeRepublic}"><button type="button" class="sign-btn" data-sign="p-saldoTradeRepublic" aria-label="Cambiar signo (más o menos)">±</button></div></div>
+        <div class="field"><label>Saldo inicial ${escapeHtml(cn("ahorro"))}</label><div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="p-saldoSantander" placeholder="0" value="${p.saldoSantander}"><button type="button" class="sign-btn" data-sign="p-saldoSantander" aria-label="Cambiar signo (más o menos)">±</button></div></div>
+        ${usaInv() ? `<div class="field"><label>Saldo inicial ${escapeHtml(cn("inversion"))}</label><div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="p-saldoTradeRepublic" placeholder="0" value="${p.saldoTradeRepublic}"><button type="button" class="sign-btn" data-sign="p-saldoTradeRepublic" aria-label="Cambiar signo (más o menos)">±</button></div></div>` : ""}
       </div>
       <div class="field"><label>Colchón objetivo CAJA 7</label><input type="number" step="0.01" id="p-colchon" value="${p.colchon}"></div>
     </div>
@@ -1453,9 +1467,9 @@ function renderAjustes() {
       </div>
       <div class="two-col">
         <div class="field"><label>Peluquería</label><input type="number" step="0.01" id="p-peluqueria" value="${p.peluqueria}"></div>
-        <div class="field"><label>Inversión automática</label><input type="number" step="0.01" id="p-inversion" value="${p.inversion}"></div>
+        ${usaInv() ? `<div class="field"><label>Inversión automática</label><input type="number" step="0.01" id="p-inversion" value="${p.inversion}"></div>` : ""}
       </div>
-      <div class="field"><label>Ahorro fijo (Santander)</label><input type="number" step="0.01" id="p-ahorroFijo" value="${p.ahorroFijo}"></div>
+      <div class="field"><label>Ahorro fijo (${cn("ahorro")})</label><input type="number" step="0.01" id="p-ahorroFijo" value="${p.ahorroFijo}"></div>
     </div>
 
     <div class="section-title">Gastos ocasionales del coche</div>
@@ -1736,6 +1750,16 @@ function attachHandlers() {
       render();
     };
   }
+
+  [["diario","c-diario"],["ahorro","c-ahorro"],["inversion","c-inversion"]].forEach(([k, id]) => {
+    const el = document.getElementById(id);
+    if (el) el.onchange = () => {
+      params.cuentas = { ...(params.cuentas || {}), [k]: el.value.trim() };
+      saveParams(); render();
+    };
+  });
+  const chkInv = document.getElementById("c-usa-inv");
+  if (chkInv) chkInv.onchange = () => { params.usaInversion = chkInv.checked; saveParams(); render(); };
 
   const paramFieldMap = {
     "p-salarioBase":"salarioBase","p-saldoSantander":"saldoSantander","p-saldoTradeRepublic":"saldoTradeRepublic",
