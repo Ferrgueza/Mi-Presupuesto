@@ -474,7 +474,8 @@ const DEFAULT_PARAMS = {
   colchon: 10000,
   saldoSantander: 0,
   saldoTradeRepublic: 0,
-  extras: [],       // gastos fijos personalizados: [{id, nombre, importe}]
+  extras: [],       // gastos personalizados por meses: [{id, nombre, importe, meses}]
+  fijos: [],        // gastos fijos propios (todos los meses, con cambios con fecha): [{id, nombre, importe}]
   tema: "navy",      // tema de color elegido
   modoOscuro: false, // modo oscuro
   categorias: null,  // categorías del Diario (null = las de por defecto)
@@ -742,9 +743,10 @@ function exportBackup() {
       ["Meses del seguro", params.mesesSeguro.join(" y ")],
       ["Rodaje / ITV (importe)", params.rodaje],
       ["Mes del rodaje", params.mesRodaje],
-      ["Colchón objetivo CAJA 7", params.colchon],
+      [`Colchón objetivo ${cn("ahorro")}`, params.colchon],
       [`Saldo inicial ${cn("ahorro")}`, params.saldoSantander],
       ...(usaInv() ? [[`Saldo inicial ${cn("inversion")}`, params.saldoTradeRepublic]] : []),
+      ...(params.fijos || []).map(f => [`Gasto fijo: ${f.nombre}`, f.importe]),
       ...(params.extras || []).map(e => [`Extra: ${e.nombre} (${extraMesesTexto(e)})`, e.importe]),
     ];
     const wsParams = XLSX.utils.aoa_to_sheet([["Parámetro", "Valor"], ...paramRows]);
@@ -854,9 +856,13 @@ function yearOf(mData) {
 }
 function periodKey(year, mesIdx) { return year * 100 + mesIdx + 1; }
 // Valor de un importe en un mes concreto, teniendo en cuenta los cambios con fecha.
+const esFijoKey = k => String(k).startsWith("fijo_");
+const fijoDeKey = k => (params.fijos || []).find(f => "fijo_" + f.id === k);
+const getBase = k => esFijoKey(k) ? ((fijoDeKey(k) || {}).importe || 0) : params[k];
+const setBase = (k, v) => { if (esFijoKey(k)) { const f = fijoDeKey(k); if (f) f.importe = v; } else params[k] = v; };
 function pv(campo, mData) {
   const h = params.historial && params.historial[campo];
-  if (!h || !h.length) return params[campo];
+  if (!h || !h.length) return getBase(campo);
   const key = periodKey(yearOf(mData), MONTHS.indexOf(mData.mes));
   let val = h[0].valor;
   for (const e of h) if (e.desde <= key) val = e.valor;
@@ -869,6 +875,7 @@ function calcMonth(mData) {
 
   const fijosEsenciales = pv("alquiler", mData) + pv("compra", mData) + pv("gasolina", mData); // usa la gasolina presupuestada (referencia)
   const subsPelu = pv("suscripciones", mData) + pv("peluqueria", mData);
+  const fijosPers = (params.fijos || []).reduce((a, f) => a + (Number(pv("fijo_" + f.id, mData)) || 0), 0);
   const inversion = usaInv() ? pv("inversion", mData) : 0;
   const ahorroFijo = pv("ahorroFijo", mData);
 
@@ -878,7 +885,7 @@ function calcMonth(mData) {
   const extrasTotal = (params.extras || []).filter(ex => extraAplica(ex, mData.mes)).reduce((acc, ex) => acc + (Number(ex.importe) || 0), 0);
   ocasional += extrasTotal;
 
-  const totalFijosOcasional = fijosEsenciales + subsPelu + inversion + ahorroFijo + ocasional;
+  const totalFijosOcasional = fijosEsenciales + subsPelu + fijosPers + inversion + ahorroFijo + ocasional;
   const ocioPresupuestado = Math.min(salario, pv("salarioBase", mData)) - totalFijosOcasional;
   const extraSantander = Math.max(salario - pv("salarioBase", mData), 0);
 
@@ -899,12 +906,12 @@ function calcMonth(mData) {
 
   const totalSantander = ahorroFijo + extraSantander + ajusteSantander + ingresosExtra - gastoExcepcional;
   const totalTradeRepublic = inversion;
-  const totalING = fijosEsencialesReal + subsPelu + ocasional + ocioRealGastado + gastoExcepcional;
+  const totalING = fijosEsencialesReal + subsPelu + fijosPers + ocasional + ocioRealGastado + gastoExcepcional;
 
   const comprobacion = (salario + ingresosExtra) - (totalSantander + totalTradeRepublic + totalING);
 
   return {
-    fijosEsenciales, fijosEsencialesReal, subsPelu, inversion, ahorroFijo, ocasional, extrasTotal,
+    fijosEsenciales, fijosEsencialesReal, subsPelu, fijosPers, inversion, ahorroFijo, ocasional, extrasTotal,
     gastoRealGasolina, ajusteGasolina, gastoRealCompra, ajusteCompra, ingresosExtra, gastoExcepcional,
     gastoExcepcionalNota, gastosExcepcionales: listaExc,
     totalFijosOcasional, ocioPresupuestado, extraSantander, ajuste: ajusteOcio,
@@ -983,11 +990,11 @@ function renderMensual() {
         <div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="input-ajuste" placeholder="Ej. 50 o -30" value="${mData.ajusteOcio ?? ""}"><button type="button" class="sign-btn" data-sign="input-ajuste" aria-label="Cambiar signo (más o menos)">±</button></div>
       </div>
       <div class="field">
-        <label>Ajuste de gasolina <span class="hint">Presupuesto medio 100 € · positivo si gastaste de más, negativo si gastaste menos</span></label>
+        <label>Ajuste de gasolina <span class="hint">Presupuesto medio ${euro(pv("gasolina", mData))} · positivo si gastaste de más, negativo si gastaste menos</span></label>
         <div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="input-ajuste-gasolina" placeholder="Ej. -30 si gastaste 70" value="${mData.ajusteGasolina ?? ""}"><button type="button" class="sign-btn" data-sign="input-ajuste-gasolina" aria-label="Cambiar signo (más o menos)">±</button></div>
       </div>
       <div class="field">
-        <label>Ajuste de compra <span class="hint">Presupuesto medio 100 € · positivo si gastaste de más, negativo si gastaste menos</span></label>
+        <label>Ajuste de compra <span class="hint">Presupuesto medio ${euro(pv("compra", mData))} · positivo si gastaste de más, negativo si gastaste menos</span></label>
         <div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="input-ajuste-compra" placeholder="Ej. -20 si gastaste 80" value="${mData.ajusteCompra ?? ""}"><button type="button" class="sign-btn" data-sign="input-ajuste-compra" aria-label="Cambiar signo (más o menos)">±</button></div>
       </div>
       <div class="field">
@@ -1037,6 +1044,7 @@ function computeResultsHtml(mData) {
         <div class="result-row sub"><span class="label">Gasolina (real este mes)</span><span class="value">${euro(r.gastoRealGasolina)}</span></div>
       </div>
       <div class="result-row"><span class="label">Suscripciones + peluquería</span><span class="value">${euro(r.subsPelu)}</span></div>
+      ${(params.fijos || []).map(f => `<div class="result-row"><span class="label">${escapeHtml(f.nombre)}</span><span class="value">${euro(pv("fijo_" + f.id, mData))}</span></div>`).join("")}
       ${usaInv() ? `<div class="result-row"><span class="label">Inversión automática</span><span class="value">${euro(r.inversion)}</span></div>` : ""}
       <div class="result-row"><span class="label">Ahorro fijo</span><span class="value">${euro(r.ahorroFijo)}</span></div>
       <div class="result-row"><span class="label">Gastos ocasionales coche</span><span class="value">${euro(r.ocasional - r.extrasTotal)}</span></div>
@@ -1089,14 +1097,14 @@ function renderResumen() {
   const count = filled.filter(Boolean).length;
 
   const salarioTotal = monthsData.reduce((acc, m) => acc + (m.salario ? Number(m.salario) : 0), 0);
-  const fijosTotal = sum(r => r.fijosEsencialesReal + r.subsPelu + r.inversion + r.ocasional);
+  const fijosTotal = sum(r => r.fijosEsencialesReal + r.subsPelu + r.fijosPers + r.inversion + r.ocasional);
   const inversionTotal = sum(r => r.totalTradeRepublic);
   const santanderTotal = sum(r => r.totalSantander);
   const ingTotal = sum(r => r.totalING);
   const ocioMedio = count ? sum(r => r.ocioPresupuestado) / count : 0;
   const ratioFijos = salarioTotal ? fijosTotal / salarioTotal : 0;
   const ratioInversion = salarioTotal ? inversionTotal / salarioTotal : 0;
-  const fijosEsencialesMes = params.alquiler + params.compra + params.gasolina;
+  const fijosEsencialesMes = params.alquiler + params.compra + params.gasolina + (params.fijos || []).reduce((a, f) => a + (Number(f.importe) || 0), 0);
   const mesesColchon = fijosEsencialesMes ? params.colchon / fijosEsencialesMes : 0;
 
   // Los saldos arrastran lo acumulado en años anteriores, no empiezan de cero cada enero.
@@ -1123,7 +1131,7 @@ function renderResumen() {
       <div class="kpi"><div class="big">${pct(ratioFijos)}</div><div class="lbl">Fijos+inversión / ingresos</div></div>
       <div class="kpi"><div class="big">${euro(ocioMedio)}</div><div class="lbl">Ocio presupuestado medio/mes</div></div>
       <div class="kpi"><div class="big">${euro0(santanderTotal)}</div><div class="lbl">Enviado a ${cn("ahorro")} (año)</div></div>
-      <div class="kpi"><div class="big">${mesesColchon.toLocaleString("es-ES",{maximumFractionDigits:1})} meses</div><div class="lbl">Colchón CAJA 7 cubre</div></div>
+      <div class="kpi"><div class="big">${mesesColchon.toLocaleString("es-ES",{maximumFractionDigits:1})} meses</div><div class="lbl">Colchón ${cn("ahorro")} cubre</div></div>
     </div>
 
     <div class="section-title">Enviado a ${cn("ahorro")} mes a mes</div>
@@ -1251,6 +1259,7 @@ function renderCategoryBreakdown(filled) {
   const cats = [
     { n: "Fijos esenciales (alquiler, compra, gasolina)", v: sum(r => r.fijosEsencialesReal), c: "var(--navy)" },
     { n: "Suscripciones y peluquería", v: sum(r => r.subsPelu), c: "var(--teal)" },
+    { n: "Tus gastos fijos", v: sum(r => r.fijosPers), c: "var(--navy)" },
     { n: "Coche (seguro, ITV)", v: sum(r => r.ocasional - r.extrasTotal), c: "var(--gold)" },
     { n: "Tus gastos personalizados", v: sum(r => r.extrasTotal), c: "var(--ice)" },
     { n: "Ocio", v: sum(r => Math.max(0, r.ocioRealGastado)), c: "var(--light-gray)" },
@@ -1411,7 +1420,7 @@ function renderHistorialCambios() {
   filas.sort((a, b) => b.desde - a.desde);
   return filas.map(f => `
     <div class="result-row">
-      <span class="label">${NOMBRES_CAMPOS[f.campo] || f.campo}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400; margin-top:2px;">${euro(f.antes)} → ${euro(f.ahora)} · desde ${periodoTexto(f.desde)}</span></span>
+      <span class="label">${NOMBRES_CAMPOS[f.campo] || (fijoDeKey(f.campo) ? escapeHtml(fijoDeKey(f.campo).nombre) : f.campo)}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400; margin-top:2px;">${euro(f.antes)} → ${euro(f.ahora)} · desde ${periodoTexto(f.desde)}</span></span>
       <span class="value"><button class="goal-delete" data-hist-campo="${f.campo}" data-hist-desde="${f.desde}" aria-label="Deshacer cambio">↩</button></span>
     </div>`).join("") + `<p style="font-size:11px; color:var(--light-gray); margin:8px 0 0;">↩ deshace ese cambio: los meses afectados vuelven al importe anterior.</p>`;
 }
@@ -1445,7 +1454,7 @@ function renderAjustes() {
         <div class="field"><label>Saldo inicial ${escapeHtml(cn("ahorro"))}</label><div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="p-saldoSantander" placeholder="0" value="${p.saldoSantander}"><button type="button" class="sign-btn" data-sign="p-saldoSantander" aria-label="Cambiar signo (más o menos)">±</button></div></div>
         ${usaInv() ? `<div class="field"><label>Saldo inicial ${escapeHtml(cn("inversion"))}</label><div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="p-saldoTradeRepublic" placeholder="0" value="${p.saldoTradeRepublic}"><button type="button" class="sign-btn" data-sign="p-saldoTradeRepublic" aria-label="Cambiar signo (más o menos)">±</button></div></div>` : ""}
       </div>
-      <div class="field"><label>Colchón objetivo CAJA 7</label><input type="number" step="0.01" id="p-colchon" value="${p.colchon}"></div>
+      <div class="field"><label>Colchón objetivo ${escapeHtml(cn("ahorro"))}</label><input type="number" step="0.01" id="p-colchon" value="${p.colchon}"></div>
     </div>
 
     <div class="section-title">Gastos fijos mensuales</div>
@@ -1470,6 +1479,24 @@ function renderAjustes() {
         ${usaInv() ? `<div class="field"><label>Inversión automática</label><input type="number" step="0.01" id="p-inversion" value="${p.inversion}"></div>` : ""}
       </div>
       <div class="field"><label>Ahorro fijo (${cn("ahorro")})</label><input type="number" step="0.01" id="p-ahorroFijo" value="${p.ahorroFijo}"></div>
+    </div>
+
+    <div class="section-title">Tus gastos fijos</div>
+    <div class="card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Gastos que pagas todos los meses además de los de arriba (internet, gimnasio, préstamo...). Si cambias un importe, vale desde el mes de "Aplicar cambios desde". Al añadir uno nuevo, cuenta desde ese mes y no hacia atrás.</p>
+      ${(p.fijos || []).length ? p.fijos.map(f => `
+        <div class="result-row">
+          <span class="label">${escapeHtml(f.nombre)}</span>
+          <span class="value" style="display:flex; align-items:center; gap:8px;">
+            <input type="number" step="0.01" data-fijo-imp="${f.id}" value="${f.importe}" style="width:90px; text-align:right;">
+            <button class="goal-delete" data-fijo-del="${f.id}" aria-label="Borrar gasto fijo">✕</button>
+          </span>
+        </div>`).join("") : `<p style="font-size:13px; color:var(--gray); margin:0 0 10px;">Aún no has añadido ninguno.</p>`}
+      <div class="two-col" style="margin-top:10px;">
+        <div class="field"><label>Nombre</label><input type="text" id="new-fijo-name" placeholder="Ej. Internet"></div>
+        <div class="field"><label>Importe al mes</label><input type="text" inputmode="decimal" id="new-fijo-amount" placeholder="Ej. 30"></div>
+      </div>
+      <button class="btn" id="btn-add-fijo" type="button">+ Añadir gasto fijo</button>
     </div>
 
     <div class="section-title">Gastos ocasionales del coche</div>
@@ -1767,35 +1794,57 @@ function attachHandlers() {
     "p-suscripciones":"suscripciones","p-peluqueria":"peluqueria","p-inversion":"inversion",
     "p-ahorroFijo":"ahorroFijo","p-seguroCoche":"seguroCoche","p-rodaje":"rodaje",
   };
+  function aplicarCambioImporte(key, nuevo) {
+    if (CAMPOS_HISTORIAL.includes(key) || esFijoKey(key)) {
+      const desde = periodKey(efectoDesde.anio, efectoDesde.mes);
+      const h = (params.historial && params.historial[key] && params.historial[key].length)
+        ? params.historial[key].filter(e => e.desde !== desde)
+        : [{ desde: 0, valor: getBase(key) }];
+      if (!h.length) h.push({ desde: 0, valor: getBase(key) });
+      h.push({ desde, valor: nuevo });
+      h.sort((a, b) => a.desde - b.desde);
+      params.historial = { ...(params.historial || {}), [key]: h };
+      setBase(key, h[h.length - 1].valor);
+    } else {
+      params[key] = nuevo;
+    }
+    scheduleAutosave();
+    const hc = document.getElementById("hist-card");
+    if (hc) { hc.innerHTML = renderHistorialCambios(); bindHistorial(); }
+  }
   Object.entries(paramFieldMap).forEach(([id, key]) => {
     const el = document.getElementById(id);
-    if (el) el.oninput = el.onchange = () => {
-      const nuevo = parseNum(el.value) || 0;
-      if (CAMPOS_HISTORIAL.includes(key)) {
-        const desde = periodKey(efectoDesde.anio, efectoDesde.mes);
-        const h = (params.historial && params.historial[key] && params.historial[key].length)
-          ? params.historial[key].filter(e => e.desde !== desde)
-          : [{ desde: 0, valor: params[key] }];
-        if (!h.length) h.push({ desde: 0, valor: params[key] });
-        h.push({ desde, valor: nuevo });
-        h.sort((a, b) => a.desde - b.desde);
-        params.historial = { ...(params.historial || {}), [key]: h };
-        params[key] = h[h.length - 1].valor;
-      } else {
-        params[key] = nuevo;
-      }
-      scheduleAutosave();
-      const hc = document.getElementById("hist-card");
-      if (hc) { hc.innerHTML = renderHistorialCambios(); bindHistorial(); }
-    };
+    if (el) el.oninput = el.onchange = () => aplicarCambioImporte(key, parseNum(el.value) || 0);
   });
+  document.querySelectorAll("[data-fijo-imp]").forEach(el => {
+    el.oninput = el.onchange = () => aplicarCambioImporte("fijo_" + el.dataset.fijoImp, parseNum(el.value) || 0);
+  });
+  document.querySelectorAll("[data-fijo-del]").forEach(b => b.onclick = () => {
+    const id = Number(b.dataset.fijoDel);
+    if (!confirm("¿Borrar este gasto fijo? Desaparece de todos los meses, también de los ya rellenados.")) return;
+    params.fijos = (params.fijos || []).filter(f => f.id !== id);
+    if (params.historial) { const hh = { ...params.historial }; delete hh["fijo_" + id]; params.historial = hh; }
+    saveParams(); render();
+  });
+  const addFijo = document.getElementById("btn-add-fijo");
+  if (addFijo) addFijo.onclick = () => {
+    const nombre = document.getElementById("new-fijo-name").value.trim();
+    const importe = parseNum(document.getElementById("new-fijo-amount").value);
+    if (!nombre || !importe || importe <= 0) { alert("Escribe un nombre y un importe válido."); return; }
+    params.fijos = [...(params.fijos || []), { id: Date.now(), nombre, importe: round2(importe) }];
+    // Si lo añades hoy, cuenta desde el mes elegido arriba en «Aplicar cambios desde», no hacia atrás.
+    const key = "fijo_" + params.fijos[params.fijos.length - 1].id;
+    const desde = periodKey(efectoDesde.anio, efectoDesde.mes);
+    params.historial = { ...(params.historial || {}), [key]: [{ desde: 0, valor: 0 }, { desde, valor: round2(importe) }] };
+    saveParams(); render();
+  };
   function bindHistorial() { document.querySelectorAll("[data-hist-campo]").forEach(btn => {
     btn.onclick = () => {
       const campo = btn.dataset.histCampo, desde = Number(btn.dataset.histDesde);
       let h = (params.historial[campo] || []).filter(e => e.desde !== desde);
       const hist = { ...params.historial };
-      if (h.length <= 1) { delete hist[campo]; params[campo] = h.length ? h[0].valor : params[campo]; }
-      else { hist[campo] = h; params[campo] = h[h.length - 1].valor; }
+      if (h.length <= 1) { delete hist[campo]; if (h.length) setBase(campo, h[0].valor); }
+      else { hist[campo] = h; setBase(campo, h[h.length - 1].valor); }
       params.historial = hist;
       saveParams(); render();
     };
