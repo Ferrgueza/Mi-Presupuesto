@@ -1,31 +1,32 @@
-const CACHE_NAME = "mi-presupuesto-v2";
+const CACHE = "gasolina-v2";
+const ASSETS = ["./", "./index.html", "./manifest.json", "./icon.svg", "./apple-touch-icon.png"];
 
-self.addEventListener("install", (event) => {
+self.addEventListener("install", e => {
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
   self.skipWaiting();
 });
 
-self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+self.addEventListener("activate", e => {
+  e.waitUntil(
+    caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
   );
   self.clients.claim();
 });
 
-// Estrategia simple: intenta red primero, si falla usa lo que haya en caché.
-// Así nunca ves una versión vieja "pegada" mientras tengas conexión.
-self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET") return;
-  // Solo gestiona archivos de la propia app; Firebase y demás servicios van directos a la red.
-  if (new URL(event.request.url).origin !== self.location.origin) return;
-  event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-        return response;
-      })
-      .catch(() => caches.match(event.request))
+self.addEventListener("fetch", e => {
+  if (e.request.method !== "GET") return;
+  e.respondWith(
+    caches.match(e.request).then(cached =>
+      cached ||
+      fetch(e.request)
+        .then(res => {
+          if (e.request.url.startsWith(self.location.origin)) {
+            const copy = res.clone();
+            caches.open(CACHE).then(c => c.put(e.request, copy));
+          }
+          return res;
+        })
+        .catch(() => cached)
+    )
   );
 });
