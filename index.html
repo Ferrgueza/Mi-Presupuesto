@@ -53,6 +53,13 @@ textarea{min-height:130px;font:13px/1.4 ui-monospace,monospace}
 .badge{display:block;font-size:12px;margin-top:2px}
 label.chk{flex-direction:row;align-items:center;gap:10px;color:var(--ink);font-size:15px}
 label.chk input{width:auto;height:20px;margin:0;accent-color:var(--acc)}
+.row .c.warn{color:var(--acc)}
+.row .c.bad{color:#c92a2a}
+.bar{height:10px;background:var(--line);border-radius:5px;overflow:hidden;margin-top:12px}
+.bar i{display:block;height:100%;width:0;background:var(--ok);border-radius:5px}
+.bar i.warn{background:var(--acc)}
+.bar i.bad{background:#c92a2a}
+#mantAlert{line-height:1.6}
 .row .acts{grid-column:2;grid-row:2;justify-self:end;display:flex;gap:14px}
 .badge.low{color:#c92a2a}
 .badge.high{color:var(--ok)}
@@ -129,6 +136,7 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 <section id="pReg">
   <h1 id="appName">Gasolina</h1>
   <div id="banner" class="card banner" hidden></div>
+  <div id="mantAlert" class="card banner" hidden></div>
 
   <div class="card hero" aria-live="polite">
     <div class="big"><span id="avg">–</span><small>L/100 km</small></div>
@@ -179,6 +187,10 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
     <div class="kpis" id="kpis"></div>
     <p class="hint" id="proj" hidden></p>
     <p class="hint" id="yoy" hidden></p>
+    <div id="bud" hidden>
+      <div class="bar"><i id="budBar"></i></div>
+      <p class="hint" id="budTxt" style="margin:6px 0 0"></p>
+    </div>
   </div>
 
   <div class="card" id="trendCard" hidden>
@@ -217,6 +229,28 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
     <p class="hint" style="margin:8px 0 12px">Pon los km que marca el coche cuando llenas el depósito por primera vez. Ese llenado (registrado con estos mismos km) será tu punto de referencia; el consumo se calcula entre llenados completos.</p>
     <button class="p" id="saveKm">Guardar km</button>
     <p id="msgKm" class="ok"></p>
+  </div>
+
+  <div class="card">
+    <h2>Presupuesto mensual</h2>
+    <label>Gasolina al mes (déjalo vacío para quitarlo)
+      <input type="number" id="cPres" step="1" min="0" inputmode="decimal" placeholder="p. ej. 120">
+    </label>
+    <p class="hint" style="margin:8px 0 12px">En KPIs verás una barra con lo que llevas gastado del mes y si, a este ritmo, te pasarás.</p>
+    <button class="p" id="savePres">Guardar presupuesto</button>
+    <p id="msgPres" class="ok"></p>
+  </div>
+
+  <div class="card">
+    <h2>Mantenimiento</h2>
+    <p class="hint" style="margin-bottom:12px">Apunta lo que te diga el mecánico y a qué km toca. Te avisaré en Registro cuando falten 1.000 km o menos.</p>
+    <div class="grid">
+      <label>Qué<input id="mNombre" maxlength="40" placeholder="Aceite y filtros"></label>
+      <label>A los km<input type="number" id="mKm" step="1" min="0" inputmode="numeric" placeholder="50000"></label>
+    </div>
+    <button class="p" id="mAdd" style="margin-top:12px">Añadir</button>
+    <p id="msgM" class="err"></p>
+    <div id="mList"></div>
   </div>
 
   <div class="card">
@@ -325,7 +359,7 @@ $("tReg").onclick = () => { toggleLitrosField(); go("reg"); }; $("tKpi").onclick
 const fbCfg = S.fb || defaultFirebase;
 const configured = fbCfg.apiKey && !fbCfg.apiKey.startsWith("TU_");
 let db = null, auth = null, colRef = null, cfgRef = null, unsubItems = null, unsubCfg = null;
-let items = [], kmInicial = null, uid = null;
+let items = [], kmInicial = null, uid = null, mant = [], presupuesto = null;
 
 function showLogin() {
   $("login").hidden = false;
@@ -374,7 +408,7 @@ if (!configured) {
     if (unsubItems) { unsubItems(); unsubItems = null; }
     if (unsubCfg) { unsubCfg(); unsubCfg = null; }
     if (!user) {
-      uid = null; items = []; kmInicial = null;
+      uid = null; items = []; kmInicial = null; mant = []; presupuesto = null;
       showLogin();
       return;
     }
@@ -395,7 +429,13 @@ if (!configured) {
         render();
       },
       e => { $("list").innerHTML = '<p class="err">Error al leer datos (' + e.code + '). Revisa las reglas de Firestore.</p>'; });
-    unsubCfg = onSnapshot(cfgRef, s => { kmInicial = s.exists() ? s.data().kmInicial ?? null : null; if (document.activeElement !== $("cKm")) $("cKm").value = kmInicial ?? ""; render(); });
+    unsubCfg = onSnapshot(cfgRef, s => {
+      const d = s.exists() ? s.data() : {};
+      kmInicial = d.kmInicial ?? null; mant = Array.isArray(d.mantenimiento) ? d.mantenimiento : []; presupuesto = d.presupuesto ?? null;
+      if (document.activeElement !== $("cKm")) $("cKm").value = kmInicial ?? "";
+      if (document.activeElement !== $("cPres")) $("cPres").value = presupuesto ?? "";
+      render();
+    });
   });
 }
 
@@ -550,7 +590,7 @@ function renderKpis() {
   const [y, m] = selMonth.split("-").map(Number);
   $("mLabel").textContent = new Date(y, m - 1, 1).toLocaleDateString("es-ES", { month: "long", year: "numeric" });
   const c = agg(selMonth), p = agg(prevKey(selMonth));
-  if (!c) { $("kpis").innerHTML = '<p class="hint w">Sin repostajes este mes.</p>'; return; }
+  if (!c) { $("kpis").innerHTML = '<p class="hint w">Sin repostajes este mes.</p>'; $("proj").hidden = true; $("yoy").hidden = true; $("bud").hidden = true; return; }
   const dl = (cur, prev, lowBetter) => {
     if (cur == null || prev == null || !prev) return "<small>&nbsp;</small>";
     const pct = (cur - prev) / prev * 100;
@@ -569,10 +609,11 @@ function renderKpis() {
     k("Gasto medio/repostaje", fmt(c.Em) + " " + S.cur, c.Em, p?.Em, true) +
     k("Repostajes", c.n, c.n, p?.n, false);
 
+  let proyMes = null;
   const today = new Date(), nowKey = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0");
   if (selMonth === nowKey) {
     const day = today.getDate(), daysInMonth = new Date(y, m, 0).getDate();
-    const proy = c.E / day * daysInMonth;
+    const proy = c.E / day * daysInMonth; proyMes = proy;
     $("proj").hidden = false;
     $("proj").textContent = "A este ritmo, este mes te gastarás ~" + fmt(proy) + " " + S.cur + " (llevas " + fmt(c.E) + " " + S.cur + " en " + day + " días).";
   } else $("proj").hidden = true;
@@ -586,6 +627,15 @@ function renderKpis() {
     $("yoy").className = "hint " + (pct <= 0 ? "ok" : "err");
     $("yoy").textContent = "Vs " + nombreMes + " de " + (yy - 1) + ": consumo " + (pct > 0 ? "+" : "") + fmt(pct, 0) + "% (" + fmt(py.cons) + " L/100 km entonces).";
   } else $("yoy").hidden = true;
+
+  if (presupuesto) {
+    const pct = c.E / presupuesto * 100, cl = pct > 100 ? "bad" : pct >= 80 ? "warn" : "";
+    $("bud").hidden = false;
+    $("budBar").style.width = Math.min(pct, 100) + "%"; $("budBar").className = cl;
+    let t = "Presupuesto: " + fmt(c.E) + " de " + fmt(presupuesto) + " " + S.cur + " (" + fmt(pct, 0) + " %)";
+    if (proyMes != null) t += proyMes > presupuesto ? " · A este ritmo te pasarás unos " + fmt(proyMes - presupuesto) + " " + S.cur : " · A este ritmo llegarás a ~" + fmt(proyMes) + " " + S.cur;
+    $("budTxt").textContent = t;
+  } else $("bud").hidden = true;
 }
 const stepMonth = d => {
   const months = [...new Set([...items.map(x => x.fecha && x.fecha.slice(0, 7)).filter(Boolean), new Date().toISOString().slice(0, 7)])].sort();
@@ -654,6 +704,7 @@ function render() {
   renderKpis();
   renderTrend();
   renderCompare();
+  renderMant();
   $("migBox").hidden = !items.some(x => x.legacy);
   const E = items.reduce((s, x) => s + x.importe, 0), K = items.filter(x => x.km > 0).reduce((s, x) => s + x.km, 0);
   const sK = ST.segs.reduce((s, x) => s + x.km, 0), sL = ST.segs.reduce((s, x) => s + x.L, 0), sE = ST.segs.reduce((s, x) => s + x.E, 0);
@@ -727,6 +778,54 @@ $("saveKm").onclick = async () => {
   try { await setDoc(cfgRef, { kmInicial: v }, { merge: true }); $("msgKm").className = "ok"; $("msgKm").textContent = "Guardado."; }
   catch (e) { $("msgKm").className = "err"; $("msgKm").textContent = "Error al guardar: " + e.code; }
 };
+
+// ---------- Configuración: presupuesto ----------
+$("savePres").onclick = async () => {
+  const v = parseFloat($("cPres").value.replace(",", "."));
+  if (!db) { $("msgPres").className = "err"; $("msgPres").textContent = "Conecta Firebase primero."; return; }
+  try { await setDoc(cfgRef, { presupuesto: v > 0 ? v : null }, { merge: true }); $("msgPres").className = "ok"; $("msgPres").textContent = v > 0 ? "Guardado." : "Presupuesto quitado."; }
+  catch (e) { $("msgPres").className = "err"; $("msgPres").textContent = "Error al guardar: " + e.code; }
+};
+
+// ---------- Configuración: mantenimiento ----------
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const saveMant = arr => setDoc(cfgRef, { mantenimiento: arr }, { merge: true });
+function renderMant() {
+  const p = lastOdo(), list = [...mant].sort((a, b) => a.km - b.km);
+  const est = x => {
+    if (p == null) return { t: "–", c: "" };
+    const r = x.km - p;
+    return r < 0 ? { t: "pasado por " + fmt(-r, 0) + " km", c: "bad" } : { t: "faltan " + fmt(r, 0) + " km", c: r <= 1000 ? "warn" : "" };
+  };
+  $("mList").innerHTML = list.length ? list.map(x => { const e = est(x);
+    return `<div class="row"><div class="d">${esc(x.nombre)}</div><div class="c ${e.c}">${e.t}</div>
+      <div class="m">a los ${fmt(x.km, 0)} km</div>
+      <div class="acts"><button class="x" data-mk="${x.id}">Cambiar km</button><button class="x" data-md="${x.id}">Borrar</button></div></div>`; }).join("")
+    : '<p class="hint" style="margin-top:12px">Aún no has apuntado nada.</p>';
+  const al = p == null ? [] : list.filter(x => x.km - p <= 1000);
+  $("mantAlert").hidden = !al.length;
+  if (al.length) {
+    $("mantAlert").innerHTML = "<b>Mantenimiento</b><br>" + al.map(x => { const r = x.km - p;
+      return esc(x.nombre) + ": " + (r < 0 ? "pasado por " + fmt(-r, 0) + " km" : "faltan " + fmt(r, 0) + " km"); }).join("<br>") + ' · <a class="lnk" id="goMant">Ver</a>';
+    $("goMant").onclick = () => go("cfg");
+  }
+}
+$("mAdd").onclick = async () => {
+  const nombre = $("mNombre").value.trim(), km = parseInt($("mKm").value, 10);
+  if (!nombre || !(km > 0)) { $("msgM").textContent = "Escribe qué es y a qué km toca."; return; }
+  if (!db) { $("msgM").textContent = "Conecta Firebase primero."; return; }
+  try { await saveMant([...mant, { id: newId(), nombre, km }]); $("mNombre").value = ""; $("mKm").value = ""; $("msgM").textContent = ""; }
+  catch (e) { $("msgM").textContent = "Error al guardar: " + e.code; }
+};
+$("mList").addEventListener("click", async e => {
+  const k = e.target.dataset.mk, d = e.target.dataset.md;
+  try {
+    if (k) {
+      const x = mant.find(m => m.id === k), v = parseInt(prompt("Nuevos km para «" + x.nombre + "»:", x.km), 10);
+      if (v > 0) await saveMant(mant.map(m => m.id === k ? { ...m, km: v } : m));
+    } else if (d && confirm("¿Borrar este aviso?")) await saveMant(mant.filter(m => m.id !== d));
+  } catch (err) { $("msgM").textContent = "Error: " + err.code; }
+});
 
 // ---------- Configuración: personalizar ----------
 $("cName").value = S.name; $("cColor").value = S.color; $("cTheme").value = S.theme; $("cCur").value = S.cur; $("cPrecio").value = S.precio ?? "";

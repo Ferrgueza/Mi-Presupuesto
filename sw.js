@@ -1,4 +1,4 @@
-const CACHE = "gasolina-v2";
+const CACHE = "gasolina-v3";
 const ASSETS = ["./", "./index.html", "./manifest.json", "./icon.svg", "./apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
