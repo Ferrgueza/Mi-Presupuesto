@@ -763,7 +763,6 @@ function exportBackup() {
       ["Compra (presupuesto medio)", params.compra],
       ["Gasolina (presupuesto medio)", params.gasolina],
       ["Suscripciones", params.suscripciones],
-      ["Peluquería", params.peluqueria],
       ["Inversión automática", params.inversion],
       ["Ahorro fijo", params.ahorroFijo],
       ["Seguro del coche (importe)", params.seguroCoche],
@@ -957,7 +956,7 @@ function calcMonth(mData) {
   if (salario === null || salario === undefined || salario === "") return null;
 
   const fijosEsenciales = pv("alquiler", mData) + pv("compra", mData) + pv("gasolina", mData); // usa la gasolina presupuestada (referencia)
-  const subsPelu = pv("suscripciones", mData) + pv("peluqueria", mData);
+  const subsPelu = pv("suscripciones", mData); // (la peluquería ya no es un gasto fijo: se apunta en el Diario)
   const fijosPers = (params.fijos || []).reduce((a, f) => a + (Number(pv("fijo_" + f.id, mData)) || 0), 0);
   const inversion = usaInv() ? pv("inversion", mData) : 0;
   const ahorroFijo = pv("ahorroFijo", mData);
@@ -1163,7 +1162,7 @@ function computeResultsHtml(mData) {
         <div class="result-row sub"><span class="label">Compra (real este mes)</span><span class="value">${euro(r.gastoRealCompra)}</span></div>
         <div class="result-row sub"><span class="label">Gasolina (real este mes)</span><span class="value">${euro(r.gastoRealGasolina)}</span></div>
       </div>
-      <div class="result-row"><span class="label">Suscripciones + peluquería</span><span class="value">${euro(r.subsPelu)}</span></div>
+      <div class="result-row"><span class="label">Suscripciones</span><span class="value">${euro(r.subsPelu)}</span></div>
       ${(params.fijos || []).map(f => `<div class="result-row"><span class="label">${escapeHtml(f.nombre)}</span><span class="value">${euro(pv("fijo_" + f.id, mData))}</span></div>`).join("")}
       ${usaInv() ? `<div class="result-row"><span class="label">Inversión automática</span><span class="value">${euro(r.inversion)}</span></div>` : ""}
       <div class="result-row"><span class="label">Ahorro fijo</span><span class="value">${euro(r.ahorroFijo)}</span></div>
@@ -1231,6 +1230,110 @@ function renderComprobarSaldo(saldoCalc) {
     <button class="btn" id="comp-btn" type="button">Comprobar</button>
     ${res}
     ${hist.length ? `<div style="margin-top:14px; font-size:12px; color:var(--gray); font-weight:600;">Últimas comprobaciones</div>${hist.map(h => `<div class="result-row"><span class="label">${fechaBonita(h.fecha).split(",").slice(-1)[0].trim()}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400;">Real ${euro(h.real)} · calculado ${euro(h.calculado)}${h.ajustado ? " · dejado cuadrado" : ""}</span></span><span class="value" style="color:${Math.abs(h.real - h.calculado) < 0.5 ? "var(--teal)" : "var(--red)"}">${h.real - h.calculado > 0 ? "+" : ""}${euro(h.real - h.calculado)}</span></div>`).join("")}` : ""}`;
+}
+
+// ---------- Gráfico circular de gastos por categoría (Resumen) ----------
+const PIE_COLORS = ["#FF6B5E", "#FF9A4D", "#FFCB47", "#FFE600", "#C4E84A", "#6FD36B", "#62E8D8", "#6BB8E6", "#A98AE0", "#EE7FE0", "#E87AA0", "#B0B7C3"];
+let pieView = null, pieSel = null, pieCmp = false;
+function pieDatos() {
+  if (!pieView) { const h = new Date(); pieView = { y: h.getFullYear(), m: h.getMonth() }; }
+  const lista = gastosDelMes(pieView.y, pieView.m);
+  const t = sumaPorCat(lista);
+  const total = lista.reduce((a, g) => a + g.importe, 0);
+  let filas = Object.keys(t).map(id => ({ id, v: t[id] })).sort((a, b) => b.v - a.v);
+  // Las categorías pequeñas (menos del 3 %) o a partir de la 9ª se agrupan en «Otras»
+  const grandes = filas.filter((f, i) => i < 9 && f.v / total >= 0.03);
+  const resto = filas.filter(f => !grandes.includes(f));
+  if (resto.length > 1) grandes.push({ id: "__otras__", v: resto.reduce((a, f) => a + f.v, 0), ids: resto.map(r => r.id) });
+  else if (resto.length === 1) grandes.push(resto[0]);
+  return { lista, total, filas: grandes };
+}
+function pieSvg(filas, total) {
+  const R = 100, C = 110;
+  if (!total) return "";
+  if (filas.length === 1) return `<svg viewBox="0 0 220 220" width="100%" style="max-width:260px; display:block; margin:0 auto;"><circle cx="${C}" cy="${C}" r="${R}" fill="${PIE_COLORS[0]}" data-pie-cat="${filas[0].id}" style="cursor:pointer;"/></svg>`;
+  let ang = -Math.PI / 2;
+  const paths = filas.map((f, i) => {
+    const a = f.v / total * Math.PI * 2, a2 = ang + a;
+    const x1 = C + R * Math.cos(ang), y1 = C + R * Math.sin(ang), x2 = C + R * Math.cos(a2), y2 = C + R * Math.sin(a2);
+    const d = `M${C},${C} L${x1.toFixed(2)},${y1.toFixed(2)} A${R},${R} 0 ${a > Math.PI ? 1 : 0} 1 ${x2.toFixed(2)},${y2.toFixed(2)} Z`;
+    ang = a2;
+    const sel = pieSel === f.id;
+    return `<path d="${d}" fill="${i === filas.length - 1 && f.id === "__otras__" ? PIE_COLORS[11] : PIE_COLORS[i % 11]}" stroke="var(--card, #fff)" stroke-width="${sel ? 4 : 1.5}" data-pie-cat="${f.id}" style="cursor:pointer; ${sel ? "opacity:1;" : pieSel ? "opacity:.45;" : ""}"/>`;
+  }).join("");
+  return `<svg viewBox="0 0 220 220" width="100%" style="max-width:260px; display:block; margin:0 auto;">${paths}</svg>`;
+}
+function pieSvgMap(items, total, colorOf) {
+  const R = 100, C = 110;
+  if (!total) return `<div style="height:120px; display:flex; align-items:center; justify-content:center; color:var(--light-gray); font-size:12px;">Sin gastos</div>`;
+  if (items.length === 1) return `<svg viewBox="0 0 220 220" width="100%"><circle cx="${C}" cy="${C}" r="${R}" fill="${colorOf(items[0].id)}"/></svg>`;
+  let ang = -Math.PI / 2;
+  return `<svg viewBox="0 0 220 220" width="100%">${items.map(f => {
+    const a = f.v / total * Math.PI * 2, a2 = ang + a;
+    const x1 = C + R * Math.cos(ang), y1 = C + R * Math.sin(ang), x2 = C + R * Math.cos(a2), y2 = C + R * Math.sin(a2);
+    const p = `<path d="M${C},${C} L${x1.toFixed(2)},${y1.toFixed(2)} A${R},${R} 0 ${a > Math.PI ? 1 : 0} 1 ${x2.toFixed(2)},${y2.toFixed(2)} Z" fill="${colorOf(f.id)}" stroke="var(--card, #fff)" stroke-width="1.5"/>`;
+    ang = a2; return p;
+  }).join("")}</svg>`;
+}
+function renderPieCompare() {
+  const { y, m } = pieView;
+  const py = m === 0 ? y - 1 : y, pm = m === 0 ? 11 : m - 1;
+  const la = gastosDelMes(y, m), lp = gastosDelMes(py, pm);
+  const ta = sumaPorCat(la), tp = sumaPorCat(lp);
+  const totA = la.reduce((a, g) => a + g.importe, 0), totP = lp.reduce((a, g) => a + g.importe, 0);
+  // Mismo color para la misma categoría en los dos círculos
+  const ids = [...new Set([...Object.keys(ta), ...Object.keys(tp)])].sort((a, b) => ((ta[b] || 0) + (tp[b] || 0)) - ((ta[a] || 0) + (tp[a] || 0)));
+  const colorOf = id => PIE_COLORS[Math.min(ids.indexOf(id), 11)];
+  const items = t => ids.filter(id => t[id]).map(id => ({ id, v: t[id] })).sort((a, b) => b.v - a.v);
+  const max = Math.max(1, ...ids.map(id => Math.max(ta[id] || 0, tp[id] || 0)));
+  const sg = d => (d > 0 ? "+" : "−") + euro(Math.abs(d));
+  const dT = totA - totP;
+  return `
+    <div style="display:flex; gap:10px; margin-bottom:6px;">
+      <div style="flex:1; text-align:center;"><div style="font-size:12px; font-weight:700; color:var(--fg);">${MONTHS[m]}</div><div style="font-size:12px; color:var(--gray); margin-bottom:6px;">${euro(totA)}</div>${pieSvgMap(items(ta), totA, colorOf)}</div>
+      <div style="flex:1; text-align:center;"><div style="font-size:12px; font-weight:700; color:var(--fg);">${MONTHS[pm]}</div><div style="font-size:12px; color:var(--gray); margin-bottom:6px;">${euro(totP)}</div>${pieSvgMap(items(tp), totP, colorOf)}</div>
+    </div>
+    <div style="text-align:center; font-size:13px; font-weight:700; margin:6px 0 14px; color:${Math.abs(dT) < 1 ? "var(--gray)" : dT > 0 ? "var(--red)" : "var(--teal)"};">${Math.abs(dT) < 1 ? "Gastas lo mismo" : (dT > 0 ? "Gastas " + euro(dT) + " más" : "Gastas " + euro(-dT) + " menos") + " que en " + MONTHS[pm]}</div>
+    ${ids.map(id => { const a = ta[id] || 0, p = tp[id] || 0, d = a - p; return `
+      <div class="cat-row" style="margin-bottom:12px;">
+        <div class="cat-head"><span><span style="display:inline-block; width:10px; height:10px; border-radius:3px; background:${colorOf(id)}; margin-right:6px;"></span>${catDe(id).e} ${escapeHtml(catDe(id).n)}</span><span class="cat-val" style="color:${Math.abs(d) < 1 ? "var(--gray)" : d > 0 ? "var(--red)" : "var(--teal)"}">${Math.abs(d) < 1 ? "=" : sg(d)}</span></div>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:4px;"><div style="flex:1; background:var(--offwhite); border-radius:4px; height:9px;"><div style="width:${(a / max * 100).toFixed(1)}%; height:100%; border-radius:4px; background:${colorOf(id)};"></div></div><span style="font-size:11px; width:62px; text-align:right; color:var(--fg);">${euro(a)}</span></div>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:3px;"><div style="flex:1; background:var(--offwhite); border-radius:4px; height:9px;"><div style="width:${(p / max * 100).toFixed(1)}%; height:100%; border-radius:4px; background:#B0B7C3;"></div></div><span style="font-size:11px; width:62px; text-align:right; color:var(--light-gray);">${euro(p)}</span></div>
+      </div>`; }).join("")}
+    <p style="font-size:11px; color:var(--light-gray); margin:4px 0 0;">Barra de color = ${MONTHS[m]} · barra gris = ${MONTHS[pm]}. Rojo = gastas más; verde = menos.</p>`;
+}
+function renderPieHeader() {
+  const { y, m } = pieView || (pieDatos(), pieView);
+  return `<div class="year-switch" style="margin-bottom:10px;"><button id="pie-prev" aria-label="Mes anterior">‹</button><span class="year-label">${MONTHS[m]} ${y}</span><button id="pie-next" aria-label="Mes siguiente">›</button></div>
+    <div class="chip-row" style="margin-bottom:12px;"><button type="button" class="chip ${pieCmp ? "on" : ""}" id="pie-cmp">⇄ Comparar con ${MONTHS[m === 0 ? 11 : m - 1]}</button></div>`;
+}
+function renderPieCard() {
+  if (pieCmp && pieView) return renderPieHeader() + renderPieCompare();
+  const { y, m } = pieView || (pieDatos(), pieView);
+  const d = pieDatos();
+  const nombre = f => f.id === "__otras__" ? "Otras" : catDe(f.id).n;
+  const emoji = f => f.id === "__otras__" ? "•••" : catDe(f.id).e;
+  let detalle = "";
+  if (pieSel) {
+    const ids = pieSel === "__otras__" ? d.filas.find(f => f.id === "__otras__").ids : [pieSel];
+    const items = d.lista.filter(g => ids.includes(g.cat)).sort((a, b) => b.fecha.localeCompare(a.fecha));
+    detalle = `<div style="margin-top:12px; padding-top:10px; border-top:1px dashed var(--border);"><div style="font-size:12px; font-weight:600; color:var(--gray); margin-bottom:6px;">${pieSel === "__otras__" ? "Otras" : emoji({ id: pieSel }) + " " + escapeHtml(catDe(pieSel).n)} · ${items.length} apuntes</div>${items.map(g => `<div class="result-row"><span class="label">${escapeHtml(g.concepto)}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400;">${fechaBonita(g.fecha)}${pieSel === "__otras__" ? " · " + escapeHtml(catDe(g.cat).n) : ""}</span></span><span class="value">${euro(g.importe)}</span></div>`).join("")}</div>`;
+  }
+  return renderPieHeader() + `
+    <div style="font-size:15px; font-weight:700; color:var(--fg); margin-bottom:12px;">Gastos ${euro(d.total)}</div>
+    ${d.total ? pieSvg(d.filas, d.total) + `<div style="margin-top:12px;">${d.filas.map((f, i) => {
+      const c = f.id === "__otras__" ? PIE_COLORS[11] : PIE_COLORS[i % 11];
+      return `<div class="result-row" data-pie-cat="${f.id}" style="cursor:pointer; ${pieSel === f.id ? "background:var(--offwhite); border-radius:8px;" : ""}"><span class="label" style="display:flex; align-items:center; gap:10px;"><span style="background:${c}; color:#222; font-size:12px; font-weight:700; border-radius:6px; padding:3px 7px; min-width:44px; text-align:center;">${(f.v / d.total * 100).toFixed(0)}%</span>${emoji(f)} ${escapeHtml(nombre(f))}</span><span class="value">${euro(f.v)}</span></div>`;
+    }).join("")}</div>${detalle}` : `<p style="font-size:13px; color:var(--gray); margin:0;">No hay gastos apuntados en el Diario en ${MONTHS[m]}.</p>`}`;
+}
+function bindPieCard() {
+  const card = document.getElementById("pie-card"); if (!card) return;
+  const refresh = () => { card.innerHTML = renderPieCard(); bindPieCard(); };
+  const mover = dm => { let { y, m } = pieView; m += dm; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } pieView = { y, m }; pieSel = null; refresh(); };
+  document.getElementById("pie-prev").onclick = () => mover(-1);
+  document.getElementById("pie-next").onclick = () => mover(1);
+  document.getElementById("pie-cmp").onclick = () => { pieCmp = !pieCmp; pieSel = null; refresh(); };
+  card.querySelectorAll("[data-pie-cat]").forEach(el => el.onclick = () => { pieSel = pieSel === el.dataset.pieCat ? null : el.dataset.pieCat; refresh(); });
 }
 
 function renderResumen() {
@@ -1301,6 +1404,9 @@ function renderResumen() {
       </div>
     </div>
     <p style="font-size:11px; color:var(--light-gray); margin:0 0 10px;">Los saldos arrastran lo acumulado en años anteriores y no incluyen rentabilidad de las inversiones.</p>
+
+    <div class="section-title no-print">Gastos por categoría</div>
+    <div class="card no-print" id="pie-card">${renderPieCard()}</div>
 
     <div class="section-title">Meses con sobregasto</div>
     <div class="card">
@@ -1405,7 +1511,7 @@ function renderCategoryBreakdown(filled) {
   const sum = fn => filled.reduce((a, r) => r ? a + fn(r) : a, 0);
   const cats = [
     { n: "Fijos esenciales (alquiler, compra, gasolina)", v: sum(r => r.fijosEsencialesReal), c: "var(--navy)" },
-    { n: "Suscripciones y peluquería", v: sum(r => r.subsPelu), c: "var(--teal)" },
+    { n: "Suscripciones", v: sum(r => r.subsPelu), c: "var(--teal)" },
     { n: "Tus gastos fijos", v: sum(r => r.fijosPers), c: "var(--navy)" },
     { n: "Coche (seguro, ITV)", v: sum(r => r.ocasional - r.extrasTotal), c: "var(--gold)" },
     { n: "Tus gastos personalizados", v: sum(r => r.extrasTotal), c: "var(--ice)" },
@@ -1636,10 +1742,7 @@ function renderAjustes() {
         <div class="field"><label>Gasolina <span class="hint">Presupuesto medio; ajústalo cada mes en la pestaña Mensual</span></label><input type="number" step="0.01" id="p-gasolina" value="${p.gasolina}"></div>
         <div class="field"><label>Suscripciones</label><input type="number" step="0.01" id="p-suscripciones" value="${p.suscripciones}"></div>
       </div>
-      <div class="two-col">
-        <div class="field"><label>Peluquería</label><input type="number" step="0.01" id="p-peluqueria" value="${p.peluqueria}"></div>
-        ${usaInv() ? `<div class="field"><label>Inversión automática</label><input type="number" step="0.01" id="p-inversion" value="${p.inversion}"></div>` : ""}
-      </div>
+      ${usaInv() ? `<div class="field"><label>Inversión automática</label><input type="number" step="0.01" id="p-inversion" value="${p.inversion}"></div>` : ""}
       <div class="field"><label>Ahorro fijo (${cn("ahorro")})</label><input type="number" step="0.01" id="p-ahorroFijo" value="${p.ahorroFijo}"></div>
     </div>
 
@@ -1882,6 +1985,7 @@ function attachHandlers() {
       if (g) { g.fecha = inp.value; saveGoals(); render(); }
     };
   });
+  bindPieCard();
   const compBtn = document.getElementById("comp-btn");
   if (compBtn) {
     const calcActual = () => params.saldoSantander + sumAllYears(r => r.totalSantander);
@@ -1994,7 +2098,7 @@ function attachHandlers() {
   const paramFieldMap = {
     "p-salarioBase":"salarioBase","p-saldoSantander":"saldoSantander","p-saldoTradeRepublic":"saldoTradeRepublic",
     "p-colchon":"colchon","p-alquiler":"alquiler","p-compra":"compra","p-gasolina":"gasolina",
-    "p-suscripciones":"suscripciones","p-peluqueria":"peluqueria","p-inversion":"inversion",
+    "p-suscripciones":"suscripciones","p-inversion":"inversion",
     "p-ahorroFijo":"ahorroFijo","p-seguroCoche":"seguroCoche","p-rodaje":"rodaje",
   };
   function aplicarCambioImporte(key, nuevo) {
