@@ -53,7 +53,7 @@
   .print-only{display:none;}
   @media print{
     :root, :root[data-dark="1"]{--offwhite:#fff; --surface:#fff; --fg:#1E2761; --gray:#5B6472; --light-gray:#8A94A6; --border:#E3E8F2; --input-bg:#fff; --red-bg:#FCEAEA; --ok-bg:#E7F5F2;}
-    nav.tabbar, .no-print, .year-switch button, .goal-delete, #btn-add-goal, .goal-form, .goal-date-row, .save-toast{display:none !important;}
+    nav.tabbar, .no-print, .year-switch button, .goal-delete, .undo-bar, #btn-add-goal, .goal-form, .goal-date-row, .save-toast{display:none !important;}
     .print-only{display:block !important;}
     body, #app{background:#fff !important; max-width:none !important; padding-bottom:0 !important;}
     header{position:static !important; -webkit-print-color-adjust:exact; print-color-adjust:exact;}
@@ -298,6 +298,9 @@
   }
   .save-toast.error{background:var(--red); max-width:88%; text-align:center; line-height:1.35; border-radius:14px;}
   .save-toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+  .undo-bar{position:fixed; left:50%; bottom:88px; transform:translateX(-50%); z-index:60; background:var(--navy); color:#fff; border-radius:14px; padding:10px 14px; display:none; align-items:center; gap:14px; font-size:14px; box-shadow:0 6px 20px rgba(0,0,0,.25); max-width:92%;}
+  .undo-bar.show{display:flex;}
+  .undo-bar button{background:none; border:none; color:var(--gold); font-weight:700; font-size:14px; cursor:pointer; padding:4px 6px;}
 
   #auth-screen{
     display:none;
@@ -362,6 +365,7 @@
   </nav>
 </div>
 <div class="save-toast" id="toast">Guardado</div>
+<div class="undo-bar no-print" id="undo-bar"><span id="undo-txt">Borrado</span><button type="button" id="undo-btn">Deshacer</button></div>
 
 <script>
 const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -485,6 +489,7 @@ const DEFAULT_PARAMS = {
   cuentas: null,     // nombres de tus cuentas: {diario, inversion, ahorro}
   usaInversion: true, // false = no tengo cuenta de inversión
   usaColchon: true,   // false = no tengo cuenta de colchón
+  ultimaCopia: "",   // fecha (AAAA-MM-DD) de la última copia de seguridad descargada
   comprobaciones: [], // comprobaciones del saldo de ahorro: [{fecha, real, calculado, ajustado}]
   historial: {},     // cambios de importes con fecha: { campo: [{desde, valor}] }
 };
@@ -788,7 +793,9 @@ function exportBackup() {
 
     const fecha = new Date().toISOString().slice(0, 10);
     XLSX.writeFile(wb, `Backup_Presupuesto_${fecha}.xlsx`);
+    params.ultimaCopia = fecha; saveParams();
     showToast();
+    if (typeof render === "function" && ready) render();
   } catch (e) {
     console.error("Error exportando backup", e);
     alert("No se ha podido generar el Excel. Comprueba tu conexión e inténtalo de nuevo.");
@@ -1036,6 +1043,37 @@ function renderYearSwitch() {
   `;
 }
 
+// Tamaño de los datos guardados (Firebase admite 1 MB por documento).
+const LIMITE_BYTES = 1048576;
+function bytesDe(txt) { return (typeof TextEncoder !== "undefined") ? new TextEncoder().encode(txt).length : txt.length; }
+function tamanoDatos() {
+  let n = bytesDe(JSON.stringify(params)) + bytesDe(JSON.stringify(monthsDataByYear)) + bytesDe(JSON.stringify(goals));
+  Object.keys(gastosByYear).forEach(y => { n += bytesDe(JSON.stringify(gastosByYear[y] || [])); });
+  return n;
+}
+function kb(n) { return Math.round(n / 1024).toLocaleString("es-ES") + " KB"; }
+function renderAvisoTamano() {
+  const n = tamanoDatos(), pct = n / LIMITE_BYTES * 100;
+  if (pct < 70) return "";
+  return `<div class="warn-banner no-print" id="aviso-tamano">📦 <span><strong>Tus datos ocupan ${kb(n)} de ${kb(LIMITE_BYTES)} (${pct.toFixed(0)}%).</strong> Cuando se llene, la app dejará de guardar. Descarga una copia de seguridad y avísame para repartir los datos antes de que llegue.</span></div>`;
+}
+
+// Aviso para descargar la copia de seguridad si hace más de 30 días (o nunca, y ya hay gastos apuntados).
+function renderAvisoCopia() {
+  const DIAS = 30, hoy = new Date(hoyISO() + "T12:00:00");
+  let ref = params.ultimaCopia || "";
+  let nunca = false;
+  if (!ref) {
+    const fechas = Object.values(gastosByYear).flat().map(g => g.fecha).filter(Boolean).sort();
+    if (!fechas.length) return "";
+    ref = fechas[0]; nunca = true;
+  }
+  const dias = Math.floor((hoy - new Date(ref + "T12:00:00")) / 86400000);
+  if (!(dias >= DIAS)) return "";
+  const txt = nunca ? "Todavía no has descargado ninguna copia de seguridad." : `Hace ${dias} días que no descargas la copia de seguridad.`;
+  return `<div class="warn-banner no-print" id="aviso-copia">💾 <span><strong>${txt}</strong> Es la única protección si algo falla o se borra por error.</span><button class="btn small" id="btn-aviso-copia" type="button" style="margin-top:8px;">Descargar ahora</button></div>`;
+}
+
 function renderMensual() {
   const pills = MONTHS.map((m, i) => {
     const filled = monthsData[i].salario !== null && monthsData[i].salario !== undefined && monthsData[i].salario !== "";
@@ -1055,6 +1093,8 @@ function renderMensual() {
   ` : "";
 
   return `
+    ${renderAvisoCopia()}
+    ${renderAvisoTamano()}
     ${renderYearSwitch()}
     <div class="month-scroller">${pills}</div>
     ${mData.cerrado ? `<div class="closed-banner">🔒 <span><strong>${mData.mes} está cerrado.</strong> Los importes están bloqueados para no tocarlos sin querer. Si te faltó algo, puedes reabrirlo.</span><button class="btn small" id="btn-reopen" type="button">Reabrir mes</button></div>` : ""}
@@ -1692,6 +1732,7 @@ function renderAjustes() {
 
     <div class="section-title">Copia de seguridad</div>
     <div class="card">
+      <p style="font-size:12px; color:var(--light-gray); margin:0 0 10px;">Espacio usado: <strong id="uso-datos">${kb(tamanoDatos())}</strong> de ${kb(LIMITE_BYTES)} (${(tamanoDatos() / LIMITE_BYTES * 100).toFixed(1)}%).${params.ultimaCopia ? " Última copia: " + params.ultimaCopia + "." : ""}</p>
       <p style="font-size:12.5px; color:var(--gray); margin:0 0 12px;">Descarga un Excel con todos tus datos tal y como están ahora mismo (meses, parámetros y objetivos). No hay backup automático real: los navegadores no permiten guardar en tus archivos sin que tú lo pidas, así que descárgalo cuando quieras tener una copia al día.</p>
       <button class="btn" id="btn-export">⬇️ Descargar copia de seguridad (Excel)</button>
       <p style="font-size:12.5px; color:var(--gray); margin:16px 0 10px;">¿Has perdido datos? Sube una copia descargada con el botón de arriba y todo vuelve a como estaba ese día. Sustituye lo que tienes ahora.</p>
@@ -2023,6 +2064,8 @@ function attachHandlers() {
   if (ms2) ms2.onchange = () => { params.mesesSeguro = [ms1.value, ms2.value]; saveParams(); };
   if (mr) mr.onchange = () => { params.mesRodaje = mr.value; saveParams(); };
 
+  const avisoCopia = document.getElementById("btn-aviso-copia");
+  if (avisoCopia) avisoCopia.onclick = exportBackup;
   const exportBtn = document.getElementById("btn-export");
   if (exportBtn) exportBtn.onclick = exportBackup;
   const restBtn = document.getElementById("btn-restore"), restFile = document.getElementById("restore-file");
@@ -2188,6 +2231,32 @@ function renderComoVas(y, m, lista) {
   }).join("") + `</div>`;
 }
 
+// Compara lo gastado este mes con el mes anterior, a la misma altura del mes si es el mes en curso.
+function renderComparaMes(y, m, lista) {
+  const py = m === 0 ? y - 1 : y, pm = m === 0 ? 11 : m - 1;
+  const hoy = new Date(hoyISO() + "T12:00:00");
+  const esActual = hoy.getFullYear() === y && hoy.getMonth() === m;
+  const dia = esActual ? hoy.getDate() : 31;
+  const diaDe = g => Number(g.fecha.slice(8, 10));
+  const actual = lista.filter(g => diaDe(g) <= dia);
+  const previo = gastosDelMes(py, pm).filter(g => diaDe(g) <= dia);
+  if (!previo.length) return "";
+  const ta = sumaPorCat(actual), tp = sumaPorCat(previo);
+  const totA = actual.reduce((a, g) => a + g.importe, 0), totP = previo.reduce((a, g) => a + g.importe, 0);
+  const ids = [...new Set([...Object.keys(ta), ...Object.keys(tp)])];
+  const filas = ids.map(id => ({ id, a: ta[id] || 0, p: tp[id] || 0, d: (ta[id] || 0) - (tp[id] || 0) }))
+    .filter(x => Math.abs(x.d) >= 1).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 8);
+  const sg = d => (d > 0 ? "+" : "−") + euro(Math.abs(d));
+  const col = d => d > 0 ? "var(--red)" : "var(--teal)";
+  const dT = totA - totP;
+  const nota = esActual ? `Hasta el día ${dia} de cada mes.` : "Mes completo.";
+  return `<div class="section-title">${MONTHS[m]} frente a ${MONTHS[pm]}</div><div class="card">
+    <p style="font-size:11.5px; color:var(--light-gray); margin:0 0 10px;">${nota} Rojo = gastas más que el mes anterior; verde = menos.</p>
+    <div class="result-row"><span class="label"><strong>Total</strong><span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400;">${euro(totA)} frente a ${euro(totP)}</span></span><span class="value" style="color:${Math.abs(dT) < 1 ? "var(--gray)" : col(dT)}">${Math.abs(dT) < 1 ? "igual" : sg(dT)}</span></div>
+    ${filas.map(x => `<div class="result-row"><span class="label">${catDe(x.id).e} ${escapeHtml(catDe(x.id).n)}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400;">${euro(x.a)} frente a ${euro(x.p)}</span></span><span class="value" style="color:${col(x.d)}">${sg(x.d)}</span></div>`).join("")}
+  </div>`;
+}
+
 // Gráficos del Diario: mes a mes del año, categorías del año y conceptos que más se repiten.
 function renderGraficosGastos(y, m, lista) {
   const todos = (gastosByYear[String(y)] || []).filter(g => !esIngreso(g));
@@ -2273,6 +2342,7 @@ function renderGastos() {
     </div>
 
     ${renderComoVas(y, m, lista)}
+    ${renderComparaMes(y, m, lista)}
 
     ${cats.length ? `<div class="section-title">Por categoría <span style="font-weight:400; text-transform:none; letter-spacing:0; color:var(--light-gray); font-size:11px;">· toca una para ver sus gastos</span></div><div class="card">${cats.map(c => `
       <div class="cat-row" data-g-catfiltro="${escapeHtml(c.id)}" style="cursor:pointer; ${gastosCatFiltro === c.id ? "background:var(--offwhite); border-radius:8px; padding:4px 6px; margin:0 -6px 10px;" : ""}">
@@ -2324,7 +2394,8 @@ function renderGastos() {
 function renderGastosLista() {
   const { y, m } = gastosView;
   const f = gastosFiltro.trim().toLowerCase();
-  let lista = gastosDelMes(y, m);
+  // Si escribes en el buscador se busca en TODOS los meses y años; si no, solo en el mes que miras.
+  let lista = f ? Object.values(gastosByYear).flat().filter(g => !esIngreso(g)) : gastosDelMes(y, m);
   if (gastosCatFiltro) lista = lista.filter(g => g.cat === gastosCatFiltro);
   if (f) lista = lista.filter(g => g.concepto.toLowerCase().includes(f) || catDe(g.cat).n.toLowerCase().includes(f));
   if (!lista.length) {
@@ -2333,12 +2404,12 @@ function renderGastosLista() {
   const dias = {};
   lista.forEach(g => { (dias[g.fecha] = dias[g.fecha] || []).push(g); });
   const totalFiltro = lista.reduce((a, g) => a + g.importe, 0);
-  return (f || gastosCatFiltro ? `<p style="font-size:12.5px; color:var(--gray); margin:0 0 8px; font-weight:600;">${lista.length} resultado${lista.length === 1 ? "" : "s"} · ${euro(totalFiltro)}</p>` : "") +
+  return (f || gastosCatFiltro ? `<p style="font-size:12.5px; color:var(--gray); margin:0 0 8px; font-weight:600;">${lista.length} resultado${lista.length === 1 ? "" : "s"} · ${euro(totalFiltro)}${f ? " · en todos los meses" : ""}</p>` : "") +
     Object.keys(dias).sort().reverse().map(fecha => {
       const items = dias[fecha];
       const tot = items.reduce((a, g) => a + g.importe, 0);
       return `<div class="g-day">
-        <div class="g-day-head"><span>${fechaBonita(fecha)}</span><span>${euro(tot)}</span></div>
+        <div class="g-day-head"><span>${fechaBonita(fecha)}${f ? " " + fecha.slice(0, 4) : ""}</span><span>${euro(tot)}</span></div>
         ${items.slice().sort((a, b) => b.id - a.id).map(g => `
           <div class="g-row">
             <span class="g-emoji">${catDe(g.cat).e}</span>
@@ -2655,7 +2726,7 @@ function bindGastosLista() {
   document.querySelectorAll("[data-g-del]").forEach(b => b.onclick = async () => {
     const id = Number(b.dataset.gDel);
     const reg = Object.values(gastosByYear).flat().find(g => g.id === id);
-    if (!confirm(esIngreso(reg) ? "¿Borrar este ingreso?" : "¿Borrar este gasto?")) return;
+    if (!reg) return;
     const tocados = [];
     Object.keys(gastosByYear).forEach(a => {
       const n = gastosByYear[a].length;
@@ -2663,9 +2734,31 @@ function bindGastosLista() {
       if (gastosByYear[a].length !== n) tocados.push(a);
     });
     render();
+    mostrarDeshacer(reg, esIngreso(reg) ? "Ingreso borrado" : "Gasto borrado");
     for (const a of tocados) await saveGastosYear(a);
   });
 }
+
+// Tras borrar un gasto o ingreso, durante unos segundos se puede recuperar.
+let ultimoBorrado = null, undoTimer = null;
+function mostrarDeshacer(reg, texto) {
+  ultimoBorrado = reg;
+  document.getElementById("undo-txt").textContent = texto + ": " + (reg.concepto || "") + " " + euro(reg.importe);
+  document.getElementById("undo-bar").classList.add("show");
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(ocultarDeshacer, 8000);
+}
+function ocultarDeshacer() { clearTimeout(undoTimer); ultimoBorrado = null; const b = document.getElementById("undo-bar"); if (b) b.classList.remove("show"); }
+document.getElementById("undo-btn").onclick = async () => {
+  const reg = ultimoBorrado; if (!reg) return;
+  ocultarDeshacer();
+  const a = String(reg.fecha.slice(0, 4));
+  gastosByYear[a] = gastosByYear[a] || [];
+  if (!gastosByYear[a].some(g => g.id === reg.id)) gastosByYear[a].push(reg);
+  render();
+  await saveGastosYear(a);
+  showToast("Recuperado");
+};
 
 // ---------- Tabs ----------
 document.querySelectorAll("nav.tabbar button").forEach(btn => {
