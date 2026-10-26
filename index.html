@@ -181,6 +181,15 @@
   input[type=number]:focus, .field input[type=text]:focus, select:focus{outline:2px solid var(--gold); border-color:var(--gold);}
   input::placeholder{color:var(--light-gray); font-weight:400;}
 
+  .step-rep{border:1.5px solid var(--border); border-radius:14px; padding:10px 12px; margin-top:10px;}
+  .step-rep.done{background:var(--ok-bg); border-color:var(--ok-border);}
+  .step-rep-h{font-weight:700; font-size:14.5px; margin-bottom:4px;}
+  .line-rep{display:flex; justify-content:space-between; gap:10px; font-size:14px; padding:3px 0;}
+  .line-rep b{white-space:nowrap;}
+  .sub-rep{font-size:12px; color:var(--gray); font-weight:400;}
+  .chk-rep{display:flex; gap:8px; align-items:center; margin-top:8px; font-size:14px; font-weight:600;}
+  .chk-rep input{width:20px; height:20px;}
+  .tot-rep{display:flex; justify-content:space-between; font-weight:700; margin-top:12px; padding-top:10px; border-top:1px solid var(--border); font-size:14px;}
   .result-row{
     display:flex; justify-content:space-between; align-items:center;
     padding:8px 0; border-bottom:1px dashed var(--border); font-size:13.5px;
@@ -482,6 +491,8 @@ const DEFAULT_PARAMS = {
   saldoTradeRepublic: 0,
   extras: [],       // gastos personalizados por meses: [{id, nombre, importe, meses}]
   abrirEnDiario: false, // abrir la app directamente en la pestaña Diario
+  usaReparto: true, // mostrar en Mensual la lista «Reparto de la nómina»
+  repartoING: 600,  // lo que se pasa a la cuenta del día a día el día 2
   subsLista: [],    // control de suscripciones (solo informativo): [{id,nombre,importe,frec:"mensual"|"anual",dia,mes}]
   fijos: [],        // gastos fijos propios (todos los meses, con cambios con fecha): [{id, nombre, importe}]
   tema: "navy",      // tema de color elegido
@@ -1074,6 +1085,49 @@ function renderAvisoCopia() {
   return `<div class="warn-banner no-print" id="aviso-copia">💾 <span><strong>${txt}</strong> Es la única protección si algo falla o se borra por error.</span><button class="btn small" id="btn-aviso-copia" type="button" style="margin-top:8px;">Descargar ahora</button></div>`;
 }
 
+// ---------- Reparto de la nómina (lista para ir marcando; no mueve dinero ni cambia cálculos) ----------
+function refrescarReparto() {
+  const el = document.getElementById("reparto-card");
+  if (!el || activeTab !== "mensual") return;
+  el.outerHTML = renderRepartoCard(monthsData[activeMonthIdx]);
+  bindReparto();
+}
+function bindReparto() {
+  document.querySelectorAll("[data-rep]").forEach(c => c.onchange = () => {
+    const md = monthsData[activeMonthIdx];
+    md.reparto = { ...(md.reparto || {}), [c.dataset.rep]: c.checked };
+    saveMonths(); render();
+  });
+}
+function renderRepartoCard(mData) {
+  if (params.usaReparto === false) return "";
+  const inv = usaInv() ? (Number(pv("inversion", mData)) || 0) : 0;
+  const aho = Number(pv("ahorroFijo", mData)) || 0;
+  const alq = Number(pv("alquiler", mData)) || 0;
+  const ing = Number(params.repartoING) || 0;
+  const tieneSal = !(mData.salario === null || mData.salario === undefined || mData.salario === "");
+  const resto = (Number(mData.salario) || 0) - inv - aho - ing;
+  const extra = Math.max((Number(mData.salario) || 0) - (Number(pv("salarioBase", mData)) || 0), 0);
+  const normal = Math.max(resto - extra, 0);
+  const h = mData.reparto || {};
+  const paso = (k, titulo, cuerpo) => `<div class="step-rep${h[k] ? " done" : ""}"><div class="step-rep-h">${titulo}</div>${cuerpo}<label class="chk-rep"><input type="checkbox" data-rep="${k}" ${h[k] ? "checked" : ""}> Hecho este mes</label></div>`;
+  const ln = (a, b) => `<div class="line-rep"><span>${a}</span><b>${b}</b></div>`;
+  const dia1 = [inv > 0 ? ln(`→ ${escapeHtml(cn("inversion"))} <span class="sub-rep">(inversión)</span>`, euro(inv)) : "", aho > 0 ? ln(`→ ${escapeHtml(cn("ahorro"))} <span class="sub-rep">(ahorro)</span>`, euro(aho)) : ""].join("");
+  const pasos = [];
+  if (dia1) pasos.push(paso("s1", "Día 1 · día de cobro", dia1));
+  if (ing > 0) pasos.push(paso("s2", "Día 2 · el día siguiente", ln(`→ ${escapeHtml(cn("diario"))} <span class="sub-rep">(del día a día)</span>`, euro(ing)) + (alq > 0 ? `<div class="sub-rep">de ellos: ${euro(Math.min(alq, ing))} alquiler · ${euro(Math.max(ing - alq, 0))} gastos</div>` : "")));
+  pasos.push(paso("s3", "Día 3 · el siguiente", tieneSal
+    ? (extra > 0
+        ? ln("Resto normal", euro(normal)) + ln(`Extra sobre el salario base <span class="sub-rep">→ ${escapeHtml(cn("ahorro"))} (ahorro)</span>`, euro(Math.min(extra, Math.max(resto, 0))))
+        : ln("Resto de la nómina", euro(Math.max(resto, 0)))) + `<div class="sub-rep">${euro(Number(mData.salario) || 0)} − ${euro(inv + aho + ing)}${resto < 0 ? " (el salario no llega a cubrir los pasos anteriores)" : ""}</div>`
+    : `<div class="sub-rep">Escribe el salario de ${mData.mes} para ver cuánto es.</div>`));
+  const hechos = pasos.length;
+  const n = ["s1", "s2", "s3"].filter(k => h[k] && ((k === "s1" && dia1) || (k === "s2" && ing > 0) || k === "s3")).length;
+  return `<div class="card" id="reparto-card"><h3 style="margin:0 0 4px;">Reparto de la nómina</h3>${pasos.join("")}
+    <div class="tot-rep"><span>Pasos hechos</span><span>${n} de ${hechos}</span></div>
+    <p style="font-size:11.5px; color:var(--gray); margin:8px 0 0;">Solo es una lista para ir marcando: no mueve dinero ni cambia ningún cálculo. Se puede cambiar en Ajustes.</p></div>`;
+}
+
 function renderMensual() {
   const pills = MONTHS.map((m, i) => {
     const filled = monthsData[i].salario !== null && monthsData[i].salario !== undefined && monthsData[i].salario !== "";
@@ -1141,6 +1195,7 @@ function renderMensual() {
       </div>
       ${(!mData.cerrado && !mesVacio) ? `<button class="btn" id="btn-close-month" type="button">🔒 Cerrar ${mData.mes}</button>` : ""}
     </div>
+    ${renderRepartoCard(mData)}
     <div id="results-container">${computeResultsHtml(mData)}</div>
   `;
 }
@@ -1869,6 +1924,13 @@ function renderAjustes() {
     <div class="section-title">Historial de cambios de importes</div>
     <div class="card" id="hist-card">${renderHistorialCambios()}</div>
 
+    <div class="section-title">Reparto de la nómina</div>
+    <div class="card">
+      <label class="check-row" style="display:flex; gap:8px; align-items:center; font-size:14px;"><input type="checkbox" id="c-reparto" ${p.usaReparto !== false ? "checked" : ""}> Mostrar la lista «Reparto de la nómina» en Mensual</label>
+      <p style="font-size:12.5px; color:var(--gray); margin:8px 0 10px;">Día 1: inversión y ahorro fijo (los importes de arriba). Día 2: lo que pasas a ${escapeHtml(cn("diario"))}. Día 3: el resto de la nómina.</p>
+      <div class="field"><label>Pasar a ${escapeHtml(cn("diario"))} el día 2 (€)</label><input type="number" step="0.01" id="p-repartoING" value="${p.repartoING ?? 600}"></div>
+    </div>
+
     <div class="section-title">Al abrir la app</div>
     <div class="card">
       <label class="check-row" style="display:flex; gap:8px; align-items:center; font-size:14px;"><input type="checkbox" id="c-abrir-diario" ${p.abrirEnDiario ? "checked" : ""}> Abrir directamente en el Diario</label>
@@ -1947,7 +2009,7 @@ function attachHandlers() {
     salarioInput.oninput = () => {
       const v = salarioInput.value;
       monthsData[activeMonthIdx].salario = v === "" ? null : Number(v);
-      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]); refrescarReparto();
       attachResultHandlers();
     };
     salarioInput.onchange = () => { saveMonths(); updatePillState(); };
@@ -1957,7 +2019,7 @@ function attachHandlers() {
     ajusteInput.oninput = () => {
       const v = ajusteInput.value;
       monthsData[activeMonthIdx].ajusteOcio = parseNum(v);
-      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]); refrescarReparto();
       attachResultHandlers();
     };
     ajusteInput.onchange = saveMonths;
@@ -1967,7 +2029,7 @@ function attachHandlers() {
     ajusteGasolinaInput.oninput = () => {
       const v = ajusteGasolinaInput.value;
       monthsData[activeMonthIdx].ajusteGasolina = parseNum(v);
-      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]); refrescarReparto();
       attachResultHandlers();
     };
     ajusteGasolinaInput.onchange = saveMonths;
@@ -1977,7 +2039,7 @@ function attachHandlers() {
     ajusteCompraInput.oninput = () => {
       const v = ajusteCompraInput.value;
       monthsData[activeMonthIdx].ajusteCompra = parseNum(v);
-      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]); refrescarReparto();
       attachResultHandlers();
     };
     ajusteCompraInput.onchange = saveMonths;
@@ -1987,7 +2049,7 @@ function attachHandlers() {
     ingresosExtraInput.oninput = () => {
       const v = ingresosExtraInput.value;
       monthsData[activeMonthIdx].ingresosExtra = v === "" ? null : Number(v);
-      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]); refrescarReparto();
       attachResultHandlers();
     };
     ingresosExtraInput.onchange = saveMonths;
@@ -2150,6 +2212,9 @@ function attachHandlers() {
       saveParams(); render();
     };
   });
+  const chkRep = document.getElementById("c-reparto");
+  if (chkRep) chkRep.onchange = () => { params.usaReparto = chkRep.checked; saveParams(); };
+  bindReparto();
   const chkDia = document.getElementById("c-abrir-diario");
   if (chkDia) chkDia.onchange = () => { params.abrirEnDiario = chkDia.checked; saveParams(); };
   const chkCol = document.getElementById("c-usa-col");
@@ -2160,7 +2225,7 @@ function attachHandlers() {
   const paramFieldMap = {
     "p-salarioBase":"salarioBase","p-saldoSantander":"saldoSantander","p-saldoTradeRepublic":"saldoTradeRepublic",
     "p-colchon":"colchon","p-alquiler":"alquiler","p-compra":"compra","p-gasolina":"gasolina",
-    "p-inversion":"inversion",
+    "p-inversion":"inversion","p-repartoING":"repartoING",
     "p-ahorroFijo":"ahorroFijo","p-seguroCoche":"seguroCoche","p-rodaje":"rodaje",
   };
   function aplicarCambioImporte(key, nuevo) {
@@ -2295,7 +2360,7 @@ function attachResultHandlers() {
   if (toggle) {
     toggle.onclick = () => {
       expandedFijos = !expandedFijos;
-      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]); refrescarReparto();
       attachResultHandlers();
     };
   }
@@ -2303,7 +2368,7 @@ function attachResultHandlers() {
   if (toggleExtras) {
     toggleExtras.onclick = () => {
       expandedExtras = !expandedExtras;
-      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]);
+      document.getElementById("results-container").innerHTML = computeResultsHtml(monthsData[activeMonthIdx]); refrescarReparto();
       attachResultHandlers();
     };
   }
