@@ -168,8 +168,8 @@
   .field label{
     display:block; font-size:12.5px; color:var(--gray); margin-bottom:5px; font-weight:600;
   }
-  .field .hint{font-size:11px; color:var(--light-gray); font-weight:400; display:block; margin-top:2px;}  input[type=number], select{
-    width:100%;
+  .field .hint{font-size:11px; color:var(--light-gray); font-weight:400; display:block; margin-top:2px;}  input[type=number], .field input[type=text], select{
+    width:100%; box-sizing:border-box; min-width:0;
     font-size:16px;
     padding:11px 12px;
     border-radius:10px;
@@ -178,7 +178,7 @@
     color:var(--fg);
     font-weight:600;
   }
-  input[type=number]:focus, select:focus{outline:2px solid var(--gold); border-color:var(--gold);}
+  input[type=number]:focus, .field input[type=text]:focus, select:focus{outline:2px solid var(--gold); border-color:var(--gold);}
   input::placeholder{color:var(--light-gray); font-weight:400;}
 
   .result-row{
@@ -482,6 +482,7 @@ const DEFAULT_PARAMS = {
   saldoTradeRepublic: 0,
   extras: [],       // gastos personalizados por meses: [{id, nombre, importe, meses}]
   abrirEnDiario: false, // abrir la app directamente en la pestaña Diario
+  subsLista: [],    // control de suscripciones (solo informativo): [{id,nombre,importe,frec:"mensual"|"anual",dia,mes}]
   fijos: [],        // gastos fijos propios (todos los meses, con cambios con fecha): [{id, nombre, importe}]
   tema: "navy",      // tema de color elegido
   modoOscuro: false, // modo oscuro
@@ -1691,6 +1692,64 @@ function renderHistorialCambios() {
     </div>`).join("") + `<p style="font-size:11px; color:var(--light-gray); margin:8px 0 0;">↩ deshace ese cambio: los meses afectados vuelven al importe anterior.</p>`;
 }
 let efectoDesde = { mes: new Date().getMonth(), anio: new Date().getFullYear() };
+// ---------- Mis suscripciones (solo informativo: no entra en ningún cálculo) ----------
+let subEditId = null;
+function subProximoCobro(sb, hoy) {
+  hoy = hoy || new Date(); hoy = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  const dia = Math.min(Math.max(parseInt(sb.dia) || 1, 1), 31);
+  const clamp = (y, m) => new Date(y, m, Math.min(dia, new Date(y, m + 1, 0).getDate()));
+  if (sb.frec === "anual") {
+    const m = Math.min(Math.max(parseInt(sb.mes) || 0, 0), 11);
+    let d = clamp(hoy.getFullYear(), m);
+    if (d < hoy) d = clamp(hoy.getFullYear() + 1, m);
+    return d;
+  }
+  let d = clamp(hoy.getFullYear(), hoy.getMonth());
+  if (d < hoy) d = clamp(hoy.getFullYear(), hoy.getMonth() + 1);
+  return d;
+}
+function subTextoFecha(d) { return d.getDate() + " " + MONTHS[d.getMonth()].slice(0, 3).toLowerCase(); }
+function renderSubsCard() {
+  const lista = params.subsLista || [];
+  const hoy = new Date(); const h0 = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  const items = lista.map(sb => ({ sb, prox: subProximoCobro(sb, h0) })).sort((x, y) => x.prox - y.prox);
+  const mensual = lista.reduce((a, sb) => a + (Number(sb.importe) || 0) / (sb.frec === "anual" ? 12 : 1), 0);
+  const ed = subEditId ? lista.find(x => x.id === subEditId) : null;
+  const frecEd = ed ? ed.frec : "mensual";
+  const cuando = sb => sb.frec === "anual"
+    ? `Cada año, ${sb.dia || 1} de ${MONTHS[Math.min(Math.max(parseInt(sb.mes) || 0, 0), 11)].toLowerCase()}`
+    : `Cada mes, día ${sb.dia || 1}`;
+  const dias = d => { const n = Math.round((d - h0) / 86400000); return n === 0 ? "hoy" : n === 1 ? "mañana" : "en " + n + " días"; };
+  return `
+    <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Apunta aquí tus suscripciones: el total al mes es el importe de «Suscripciones» en gastos fijos, y se actualiza solo al añadir, cambiar o borrar (vale desde el mes de «Aplicar cambios desde»).</p>
+    ${items.length ? items.map(({ sb, prox }) => `
+      <div class="result-row">
+        <span class="label" style="flex:1; min-width:0; padding-right:10px;">${escapeHtml(sb.nombre)}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400; margin-top:2px;">${cuando(sb)} · próximo cobro: ${subTextoFecha(prox)} (${dias(prox)})</span></span>
+        <span class="value" style="display:flex; align-items:center; gap:8px;">
+          ${euro(Number(sb.importe) || 0)}
+          <button class="goal-delete" data-sub-edit="${sb.id}" aria-label="Editar suscripción">✎</button>
+          <button class="goal-delete" data-sub-del="${sb.id}" aria-label="Borrar suscripción">✕</button>
+        </span>
+      </div>`).join("") + `
+      <div class="result-row" style="border-top:1px solid var(--border); margin-top:6px; padding-top:8px;">
+        <span class="label"><strong>Total al mes (anuales prorrateadas)</strong></span>
+        <span class="value"><strong>${euro(mensual)}</strong></span>
+      </div>
+      <div class="result-row"><span class="label">Total al año</span><span class="value">${euro(mensual * 12)}</span></div>`
+    : `<p style="font-size:13px; color:var(--gray); margin:0 0 10px;">Aún no has añadido ninguna.</p>`}
+    <div class="two-col" style="margin-top:10px;">
+      <div class="field"><label>Nombre</label><input type="text" id="sub-name" placeholder="Ej. Netflix" value="${ed ? escapeHtml(ed.nombre) : ""}"></div>
+      <div class="field"><label>Importe</label><input type="text" inputmode="decimal" id="sub-amount" placeholder="Ej. 12,99" value="${ed ? String(ed.importe).replace(".", ",") : ""}"></div>
+    </div>
+    <div class="two-col">
+      <div class="field"><label>Se paga</label><select id="sub-frec"><option value="mensual" ${frecEd === "mensual" ? "selected" : ""}>Cada mes</option><option value="anual" ${frecEd === "anual" ? "selected" : ""}>Una vez al año</option></select></div>
+      <div class="field"><label>Día del mes</label><input type="number" min="1" max="31" id="sub-dia" placeholder="1-31" value="${ed ? ed.dia : ""}"></div>
+    </div>
+    <div class="field" id="sub-mes-wrap" ${frecEd === "anual" ? "" : 'style="display:none"'}><label>Mes del cobro anual</label><select id="sub-mes">${MONTHS.map((m, i) => `<option value="${i}" ${ed && ed.frec === "anual" && Number(ed.mes) === i ? "selected" : ""}>${m}</option>`).join("")}</select></div>
+    <button class="btn" id="btn-sub-save" type="button">${ed ? "Guardar cambios" : "+ Añadir suscripción"}</button>
+    ${ed ? `<button class="btn small" id="btn-sub-cancel" type="button" style="margin-top:8px;">Cancelar</button>` : ""}`;
+}
+
 function renderAjustes() {
   const p = params;
   const monthOptions = (selected) => MONTHS.map(m => `<option value="${m}" ${m===selected?"selected":""}>${m}</option>`).join("");
@@ -1740,7 +1799,7 @@ function renderAjustes() {
       </div>
       <div class="two-col">
         <div class="field"><label>Gasolina <span class="hint">Presupuesto medio; ajústalo cada mes en la pestaña Mensual</span></label><input type="number" step="0.01" id="p-gasolina" value="${p.gasolina}"></div>
-        <div class="field"><label>Suscripciones</label><input type="number" step="0.01" id="p-suscripciones" value="${p.suscripciones}"></div>
+        <div class="field"><label>Suscripciones <span class="hint">Se calcula solo con «Mis suscripciones» (más abajo)</span></label><input type="number" step="0.01" id="p-suscripciones" value="${p.suscripciones}" readonly tabindex="-1" style="opacity:.75; cursor:not-allowed;"></div>
       </div>
       ${usaInv() ? `<div class="field"><label>Inversión automática</label><input type="number" step="0.01" id="p-inversion" value="${p.inversion}"></div>` : ""}
       <div class="field"><label>Ahorro fijo (${cn("ahorro")})</label><input type="number" step="0.01" id="p-ahorroFijo" value="${p.ahorroFijo}"></div>
@@ -1763,6 +1822,9 @@ function renderAjustes() {
       </div>
       <button class="btn" id="btn-add-fijo" type="button">+ Añadir gasto fijo</button>
     </div>
+
+    <div class="section-title">Mis suscripciones</div>
+    <div class="card" id="subs-card">${renderSubsCard()}</div>
 
     <div class="section-title">Gastos ocasionales del coche</div>
     <div class="card">
@@ -2098,7 +2160,7 @@ function attachHandlers() {
   const paramFieldMap = {
     "p-salarioBase":"salarioBase","p-saldoSantander":"saldoSantander","p-saldoTradeRepublic":"saldoTradeRepublic",
     "p-colchon":"colchon","p-alquiler":"alquiler","p-compra":"compra","p-gasolina":"gasolina",
-    "p-suscripciones":"suscripciones","p-inversion":"inversion",
+    "p-inversion":"inversion",
     "p-ahorroFijo":"ahorroFijo","p-seguroCoche":"seguroCoche","p-rodaje":"rodaje",
   };
   function aplicarCambioImporte(key, nuevo) {
@@ -2144,6 +2206,38 @@ function attachHandlers() {
     const desde = periodKey(efectoDesde.anio, efectoDesde.mes);
     params.historial = { ...(params.historial || {}), [key]: [{ desde: 0, valor: 0 }, { desde, valor: round2(importe) }] };
     saveParams(); render();
+  };
+  function sincronizarSubs() {
+    const tot = round2((params.subsLista || []).reduce((a, x) => a + (Number(x.importe) || 0) / (x.frec === "anual" ? 12 : 1), 0));
+    aplicarCambioImporte("suscripciones", tot);
+  }
+  const subFrec = document.getElementById("sub-frec");
+  if (subFrec) subFrec.onchange = () => { document.getElementById("sub-mes-wrap").style.display = subFrec.value === "anual" ? "" : "none"; };
+  document.querySelectorAll("[data-sub-edit]").forEach(b => b.onclick = () => { subEditId = Number(b.dataset.subEdit); render(); });
+  document.querySelectorAll("[data-sub-del]").forEach(b => b.onclick = () => {
+    const id = Number(b.dataset.subDel);
+    if (!confirm("¿Borrar esta suscripción de la lista? (No cambia ningún cálculo.)")) return;
+    params.subsLista = (params.subsLista || []).filter(x => x.id !== id);
+    if (subEditId === id) subEditId = null;
+    sincronizarSubs(); saveParams(); render();
+  });
+  const subCancel = document.getElementById("btn-sub-cancel");
+  if (subCancel) subCancel.onclick = () => { subEditId = null; render(); };
+  const subSave = document.getElementById("btn-sub-save");
+  if (subSave) subSave.onclick = () => {
+    const nombre = document.getElementById("sub-name").value.trim();
+    const importe = parseNum(document.getElementById("sub-amount").value);
+    const frec = document.getElementById("sub-frec").value;
+    const dia = parseInt(document.getElementById("sub-dia").value);
+    const mes = frec === "anual" ? parseInt(document.getElementById("sub-mes").value) : null;
+    if (!nombre || !(importe > 0)) { alert("Escribe un nombre y un importe válido."); return; }
+    if (!(dia >= 1 && dia <= 31)) { alert("Escribe el día del mes en que se cobra (de 1 a 31)."); return; }
+    const reg = { id: subEditId || Date.now(), nombre, importe: round2(importe), frec, dia, mes };
+    params.subsLista = subEditId
+      ? (params.subsLista || []).map(x => x.id === subEditId ? reg : x)
+      : [...(params.subsLista || []), reg];
+    subEditId = null;
+    sincronizarSubs(); saveParams(); render();
   };
   function bindHistorial() { document.querySelectorAll("[data-hist-campo]").forEach(btn => {
     btn.onclick = () => {
