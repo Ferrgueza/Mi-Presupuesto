@@ -747,6 +747,8 @@ function exportBackup() {
           "Ingresos extra": r ? r.ingresosExtra : (m.ingresosExtra ?? ""),
           "Gasto excepcional": r ? r.gastoExcepcional : "",
           "Concepto gasto excepcional": r ? r.gastoExcepcionalNota : "",
+          "Excepcional cargado en cuenta día a día": r ? r.excING : "",
+          "Excepcional cargado en cuenta ahorro": r ? r.excSant : "",
           "Nota": m.nota || "",
           "Mes cerrado": m.cerrado ? "Sí" : "",
           [`Total → ${cn("ahorro")}`]: r ? r.totalSantander : "",
@@ -980,11 +982,18 @@ function calcMonth(mData) {
   ocasional += extrasTotal;
 
   const totalFijosOcasional = fijosEsenciales + subsPelu + fijosPers + inversion + ahorroFijo + ocasional;
+  // Gastos excepcionales: cada uno se carga a una cuenta. En el día a día (ING) se descuentan del ocio del mes;
+  // en la de ahorro (Santander) salen directamente de ahí. Sin cuenta guardada = ahorro (como antes).
+  const listaExc = excepcionalesDe(mData);
+  const gastoExcepcional = listaExc.reduce((a, g) => a + (Number(g.importe) || 0), 0);
+  const gastoExcepcionalNota = listaExc.map(g => g.concepto).filter(Boolean).join(", ");
+  const excING = listaExc.filter(g => g.cuenta === "ing").reduce((a, g) => a + (Number(g.importe) || 0), 0);
+  const excSant = gastoExcepcional - excING;
   const ingresosManual = (mData.ingresosExtra === null || mData.ingresosExtra === undefined || mData.ingresosExtra === "") ? 0 : Number(mData.ingresosExtra);
   const ingresosDiarioMes = 0; // los ingresos del Diario NO se suman solos: se pasan con el botón «Pasar a Ingresos extra»
   const ingresosExtra = ingresosManual;
   // Los ingresos extra engordan el ocio del mes; lo que no se gaste de ese ocio acaba en el ahorro (por el ajuste de ocio).
-  const ocioPresupuestado = Math.min(salario, pv("salarioBase", mData)) - totalFijosOcasional + ingresosExtra;
+  const ocioPresupuestado = Math.min(salario, pv("salarioBase", mData)) - totalFijosOcasional + ingresosExtra - excING;
   const extraSantander = Math.max(salario - pv("salarioBase", mData), 0);
 
   const ajusteOcio = (mData.ajusteOcio === null || mData.ajusteOcio === undefined || mData.ajusteOcio === "") ? 0 : Number(mData.ajusteOcio);
@@ -997,19 +1006,16 @@ function calcMonth(mData) {
   const fijosEsencialesReal = pv("alquiler", mData) + gastoRealCompra + gastoRealGasolina; // lo que de verdad sale por ING
 
   const ajusteSantander = -ajusteOcio - ajusteGasolina - ajusteCompra;
-  const listaExc = excepcionalesDe(mData);
-  const gastoExcepcional = listaExc.reduce((a, g) => a + (Number(g.importe) || 0), 0);
-  const gastoExcepcionalNota = listaExc.map(g => g.concepto).filter(Boolean).join(", ");
 
-  const totalSantander = ahorroFijo + extraSantander + ajusteSantander - gastoExcepcional;
+  const totalSantander = ahorroFijo + extraSantander + ajusteSantander - excSant;
   const totalTradeRepublic = inversion;
-  const totalING = fijosEsencialesReal + subsPelu + fijosPers + ocasional + ocioRealGastado + gastoExcepcional;
+  const totalING = fijosEsencialesReal + subsPelu + fijosPers + ocasional + ocioRealGastado + excING;
 
-  const comprobacion = (salario + ingresosExtra) - (totalSantander + totalTradeRepublic + totalING);
+  const comprobacion = (salario + ingresosExtra) - (totalSantander + totalTradeRepublic + totalING) - excSant; // lo cargado directo a ahorro sale de ahí, no de la nómina
 
   return {
     fijosEsenciales, fijosEsencialesReal, subsPelu, fijosPers, inversion, ahorroFijo, ocasional, extrasTotal,
-    gastoRealGasolina, ajusteGasolina, gastoRealCompra, ajusteCompra, ingresosExtra, ingresosManual, ingresosDiarioMes, gastoExcepcional,
+    gastoRealGasolina, ajusteGasolina, gastoRealCompra, ajusteCompra, ingresosExtra, ingresosManual, ingresosDiarioMes, gastoExcepcional, excING, excSant,
     gastoExcepcionalNota, gastosExcepcionales: listaExc,
     totalFijosOcasional, ocioPresupuestado, extraSantander, ajuste: ajusteOcio,
     ocioRealGastado, ajusteSantander, totalSantander, totalTradeRepublic,
@@ -1176,10 +1182,10 @@ function renderMensual() {
         ${(() => { const dd = ingresosDiario(mData), cur = Number(mData.ingresosExtra) || 0; return dd > 0 && Math.abs(dd - cur) > 0.004 ? `<div style="font-size:12px; color:var(--teal); margin-top:6px;">En el Diario tienes ${euro(dd)} apuntados como ingresos. Pásalos a este campo con el botón de la pestaña Diario.</div>` : ""; })()}
       </div>
       <div class="field">
-        <label>Gastos excepcionales <span class="hint">Imprevistos (médico, reparación, multa...) · restan de ${cn("ahorro")} este mes · puedes añadir varios</span></label>
+        <label>Gastos excepcionales <span class="hint">Imprevistos (médico, viaje, multa...) · elige a qué cuenta se carga: en ${cn("diario")} se descuenta del ocio del mes, en ${cn("ahorro")} se resta del ahorro · puedes añadir varios</span></label>
         ${excepcionalesDe(mData).map(g => `
           <div class="result-row">
-            <span class="label">${escapeHtml(g.concepto || "Sin concepto")}</span>
+            <span class="label">${escapeHtml(g.concepto || "Sin concepto")}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400; margin-top:2px;">cargo en ${escapeHtml(g.cuenta === "ing" ? cn("diario") : cn("ahorro"))}</span></span>
             <span class="value" style="display:flex; align-items:center; gap:8px;">${euro(Number(g.importe) || 0)}
               <button class="goal-delete" data-exc-del="${g.id}" aria-label="Eliminar gasto">✕</button></span>
           </div>`).join("")}
@@ -1187,6 +1193,7 @@ function renderMensual() {
           <input type="text" id="exc-concepto" placeholder="Concepto (Ej. Médico)">
           <input type="number" inputmode="decimal" step="0.01" id="exc-importe" placeholder="Importe">
         </div>
+        <select id="exc-cuenta" style="margin-top:8px;"><option value="ahorro">Se carga en ${escapeHtml(cn("ahorro"))} (ahorro)</option><option value="ing">Se carga en ${escapeHtml(cn("diario"))} (día a día)</option></select>
         <button class="btn small secondary" id="btn-add-exc" style="margin-top:8px; color:var(--fg); border-color:var(--border);">+ Añadir gasto excepcional</button>
       </div>
       <div class="field">
@@ -1236,6 +1243,8 @@ function computeResultsHtml(mData) {
       <div class="result-row"><span class="label">Extra sobre salario base</span><span class="value">${euro(r.extraSantander)}</span></div>
       <div class="result-row"><span class="label">Ingresos extra (regalos, etc.)</span><span class="value">${euro(r.ingresosExtra)}</span></div>
       <div class="result-row"><span class="label">Gastos excepcionales${r.gastoExcepcionalNota ? ` · ${escapeHtml(r.gastoExcepcionalNota)}` : ""}</span><span class="value">${euro(r.gastoExcepcional)}</span></div>
+      ${r.excING > 0.004 ? `<div class="result-row sub"><span class="label">de ellos cargados en ${escapeHtml(cn("diario"))} (se descuentan del ocio)</span><span class="value">${euro(r.excING)}</span></div>` : ""}
+      ${r.excSant > 0.004 && r.excING > 0.004 ? `<div class="result-row sub"><span class="label">de ellos cargados en ${escapeHtml(cn("ahorro"))}</span><span class="value">${euro(r.excSant)}</span></div>` : ""}
     </div>
     <div class="card">
       <h3>Reparto de ${mData.mes}</h3>
@@ -2077,7 +2086,7 @@ function attachHandlers() {
   const reopenBtn = document.getElementById("btn-reopen");
   if (reopenBtn) reopenBtn.onclick = () => { monthsData[activeMonthIdx].cerrado = false; saveMonths(); render(); };
   if (activeTab === "mensual" && monthsData[activeMonthIdx].cerrado) {
-    document.querySelectorAll("#input-salario,#input-ajuste,#input-ajuste-gasolina,#input-ajuste-compra,#input-ingresos-extra,#exc-concepto,#exc-importe,#btn-add-exc,[data-exc-del],#btn-copy-prev,[data-sign]")
+    document.querySelectorAll("#input-salario,#input-ajuste,#input-ajuste-gasolina,#input-ajuste-compra,#input-ingresos-extra,#exc-concepto,#exc-importe,#exc-cuenta,#btn-add-exc,[data-exc-del],#btn-copy-prev,[data-sign]")
       .forEach(el => { el.disabled = true; });
   }
   const addExcBtn = document.getElementById("btn-add-exc");
@@ -2086,7 +2095,7 @@ function attachHandlers() {
     const importe = Number(document.getElementById("exc-importe").value);
     if (!importe || importe <= 0) { alert("Escribe un importe válido."); return; }
     const m = monthsData[activeMonthIdx];
-    m.gastosExcepcionales = [...excepcionalesDe(m).map(g => ({ ...g, id: g.id || Date.now() + Math.random() })), { id: Date.now(), concepto, importe }];
+    m.gastosExcepcionales = [...excepcionalesDe(m).map(g => ({ ...g, id: g.id || Date.now() + Math.random() })), { id: Date.now(), concepto, importe, cuenta: document.getElementById("exc-cuenta").value === "ing" ? "ing" : "ahorro" }];
     m.gastoExcepcional = null; m.gastoExcepcionalNota = null;
     saveMonths(); render();
   };
