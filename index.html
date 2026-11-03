@@ -502,6 +502,8 @@ const DEFAULT_PARAMS = {
   usaInversion: true, // false = no tengo cuenta de inversión
   usaColchon: true,   // false = no tengo cuenta de colchón
   ultimaCopia: "",   // fecha (AAAA-MM-DD) de la última copia de seguridad descargada
+  compING: null,    // punto de partida para comprobar el saldo de la cuenta del día a día (Diario): {fecha, saldo}
+  compINGhist: [],  // últimas comprobaciones de esa cuenta: [{fecha, real, esperado}]
   comprobaciones: [], // comprobaciones del saldo de ahorro: [{fecha, real, calculado, ajustado}]
   historial: {},     // cambios de importes con fecha: { campo: [{desde, valor}] }
 };
@@ -2504,6 +2506,88 @@ function renderComoVas(y, m, lista) {
 }
 
 // Compara lo gastado este mes con el mes anterior, a la misma altura del mes si es el mes en curso.
+// ---------- Comprobar saldo de la cuenta del día a día (Diario) ----------
+let compINGres = null;
+function movimientosING(desde, hasta) {
+  let gastos = 0, nGastos = 0, ingresos = 0;
+  Object.values(gastosByYear).flat().forEach(g => {
+    if (!(g.fecha > desde && g.fecha <= hasta)) return;
+    if (esIngreso(g)) ingresos += Number(g.importe) || 0;
+    else { gastos += Number(g.importe) || 0; nGastos++; }
+  });
+  return { gastos: round2(gastos), nGastos, ingresos: round2(ingresos) };
+}
+function renderComprobarING() {
+  const nombre = escapeHtml(cn("diario"));
+  const a = params.compING;
+  const hist = (params.compINGhist || []).slice(-4).reverse();
+  if (!a) return `
+    <div class="section-title">Comprobar saldo de ${nombre}</div>
+    <div class="card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Para saber si lo que apuntas en el Diario cuadra con ${nombre}: apunta hoy tu saldo real y, más adelante, la app restará los gastos del Diario desde esa fecha y te dirá cuánto debería quedarte.</p>
+      <div class="field"><label>Saldo real en ${nombre} ahora (€)</label><input type="text" class="signed-input" inputmode="decimal" autocomplete="off" id="ci-saldo" placeholder="Ej. 450"></div>
+      <button class="btn" id="ci-fijar" type="button">Fijar punto de partida</button>
+    </div>`;
+  const hoy = hoyISO();
+  const mv = movimientosING(a.fecha, hoy);
+  const r = compINGres;
+  let res = "";
+  if (r) {
+    const ok = Math.abs(r.diff) < 0.5;
+    const msg = ok ? "✓ Cuadra." : r.diff > 0
+      ? `Tienes ${euro(r.diff)} MÁS de lo esperado. Puede ser un ingreso que no apuntaste o una transferencia que no pusiste en «Pasado a ${nombre}».`
+      : `Tienes ${euro(-r.diff)} MENOS de lo esperado. Puede ser un gasto sin apuntar en el Diario (o un pago que no pusiste en «Otros pagos»).`;
+    res = `<div class="${ok ? "ok-banner" : "warn-banner"}" style="margin-top:12px;"><strong>${msg}</strong>
+      <div style="font-size:12px; margin-top:4px;">Esperado ${euro(r.esperado)} = ${euro(r.saldo)} de partida${r.entradas ? ` + ${euro(r.entradas)} pasados` : ""}${r.ingresos ? ` + ${euro(r.ingresos)} ingresos` : ""} − ${euro(r.gastos)} del Diario${r.otros ? ` − ${euro(r.otros)} otros pagos` : ""} · Real ${euro(r.real)}</div>
+      <button type="button" class="chip" id="ci-nuevo" style="background:#fff; margin-top:8px;">Empezar de nuevo desde hoy con ${euro(r.real)}</button>
+      <div style="font-size:11px; margin-top:4px;">Así la próxima comprobación parte de este saldo real.</div></div>`;
+  }
+  return `
+    <div class="section-title">Comprobar saldo de ${nombre}</div>
+    <div class="card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 8px;">Punto de partida: <strong>${euro(a.saldo)}</strong> el ${fechaBonita(a.fecha).split(",").slice(-1)[0].trim()}. Desde el día siguiente llevas <strong>${euro(mv.gastos)}</strong> en ${mv.nGastos} gastos del Diario${mv.ingresos ? ` y ${euro(mv.ingresos)} de ingresos apuntados` : ""}.</p>
+      <div class="two-col">
+        <div class="field"><label>Pasado a ${nombre} desde entonces (€)</label><input type="text" class="signed-input" inputmode="decimal" autocomplete="off" id="ci-entradas" placeholder="Ej. 600"></div>
+        <div class="field"><label>Otros pagos sin apuntar (€)</label><input type="text" class="signed-input" inputmode="decimal" autocomplete="off" id="ci-otros" placeholder="Ej. 300"></div>
+      </div>
+      <p style="font-size:11.5px; color:var(--gray); margin:-4px 0 10px;">En «Otros pagos» pon lo que sale de ${nombre} sin estar en el Diario: alquiler, suscripciones, gastos excepcionales cargados ahí…</p>
+      <div class="field"><label>Saldo real en ${nombre} ahora (€)</label><input type="text" class="signed-input" inputmode="decimal" autocomplete="off" id="ci-real" placeholder="Ej. 380"></div>
+      <button class="btn" id="ci-btn" type="button">Comprobar</button>
+      ${res}
+      <button type="button" class="chip" id="ci-reset" style="margin-top:10px;">Cambiar punto de partida</button>
+      ${hist.length ? `<div style="margin-top:12px; font-size:12px; color:var(--gray); font-weight:600;">Últimas comprobaciones</div>${hist.map(h => `<div class="result-row"><span class="label">${fechaBonita(h.fecha).split(",").slice(-1)[0].trim()}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400;">Real ${euro(h.real)} · esperado ${euro(h.esperado)}</span></span><span class="value">${h.real - h.esperado > 0 ? "+" : ""}${euro(round2(h.real - h.esperado))}</span></div>`).join("")}` : ""}
+    </div>`;
+}
+function bindComprobarING() {
+  const fijar = document.getElementById("ci-fijar");
+  if (fijar) fijar.onclick = () => {
+    const v = parseNum(document.getElementById("ci-saldo").value);
+    if (isNaN(v) || document.getElementById("ci-saldo").value.trim() === "") { alert("Escribe el saldo que ves en el banco."); return; }
+    params.compING = { fecha: hoyISO(), saldo: round2(v) }; compINGres = null;
+    saveParams(); render();
+  };
+  const btn = document.getElementById("ci-btn");
+  if (btn) btn.onclick = () => {
+    const num = id => { const t = document.getElementById(id).value.trim(); return t ? parseNum(t) : 0; };
+    const realTxt = document.getElementById("ci-real").value.trim();
+    const real = parseNum(realTxt), entradas = num("ci-entradas"), otros = num("ci-otros");
+    if (!realTxt || isNaN(real) || isNaN(entradas) || isNaN(otros)) { alert("Escribe el saldo real que ves en el banco (y números válidos en el resto)."); return; }
+    const a = params.compING, mv = movimientosING(a.fecha, hoyISO());
+    const esperado = round2(a.saldo + entradas + mv.ingresos - mv.gastos - otros);
+    compINGres = { real: round2(real), esperado, diff: round2(real - esperado), saldo: a.saldo, entradas: round2(entradas), ingresos: mv.ingresos, gastos: mv.gastos, otros: round2(otros) };
+    params.compINGhist = [...(params.compINGhist || []), { fecha: hoyISO(), real: compINGres.real, esperado }].slice(-24);
+    saveParams(); render();
+  };
+  const nuevo = document.getElementById("ci-nuevo");
+  if (nuevo) nuevo.onclick = () => {
+    if (!compINGres) return;
+    params.compING = { fecha: hoyISO(), saldo: compINGres.real }; compINGres = null;
+    saveParams(); render(); showToast("Nuevo punto de partida guardado");
+  };
+  const reset = document.getElementById("ci-reset");
+  if (reset) reset.onclick = () => { if (!confirm("¿Borrar el punto de partida y empezar con otro saldo?")) return; params.compING = null; compINGres = null; saveParams(); render(); };
+}
+
 function renderComparaMes(y, m, lista) {
   const py = m === 0 ? y - 1 : y, pm = m === 0 ? 11 : m - 1;
   const hoy = new Date(hoyISO() + "T12:00:00");
@@ -2615,6 +2699,7 @@ function renderGastos() {
 
     ${renderComoVas(y, m, lista)}
     ${renderComparaMes(y, m, lista)}
+    ${renderComprobarING()}
 
     ${cats.length ? `<div class="section-title">Por categoría <span style="font-weight:400; text-transform:none; letter-spacing:0; color:var(--light-gray); font-size:11px;">· toca una para ver sus gastos</span></div><div class="card">${cats.map(c => `
       <div class="cat-row" data-g-catfiltro="${escapeHtml(c.id)}" style="cursor:pointer; ${gastosCatFiltro === c.id ? "background:var(--offwhite); border-radius:8px; padding:4px 6px; margin:0 -6px 10px;" : ""}">
@@ -2866,6 +2951,7 @@ async function importarGastosArchivo(file) {
 }
 
 function attachGastosHandlers() {
+  bindComprobarING();
   const go = d => {
     let { y, m } = gastosView; m += d;
     if (m < 0) { m = 11; y--; } else if (m > 11) { m = 0; y++; }
