@@ -481,12 +481,14 @@ const DEFAULT_PARAMS = {
   suscripciones: 32.95,
   peluqueria: 10,
   inversion: 500,
+  aporteColchon: 0,  // lo que se aparta cada mes a la cuenta del colchón (0 = nada); cambios con fecha como los demás importes
   ahorroFijo: 100,
   seguroCoche: 150,
   rodaje: 60,
   mesesSeguro: ["Abril","Mayo"],
   mesRodaje: "Abril",
-  colchon: 10000,
+  colchon: 0,       // lo que hay ahora en la cuenta del colchón (a esto se suman los aportes mensuales)
+  colchonObjetivo: 0, // objetivo del colchón (opcional; 0 = sin objetivo)
   saldoSantander: 0,
   saldoTradeRepublic: 0,
   extras: [],       // gastos personalizados por meses: [{id, nombre, importe, meses}]
@@ -755,6 +757,7 @@ function exportBackup() {
           "Mes cerrado": m.cerrado ? "Sí" : "",
           [`Total → ${cn("ahorro")}`]: r ? r.totalSantander : "",
           ...(usaInv() ? { [`Total → ${cn("inversion")}`]: r ? r.totalTradeRepublic : "" } : {}),
+          ...(usaCol() ? { [`Total → ${cn("colchon")}`]: r ? r.totalColchon : "" } : {}),
           [`Total → ${cn("diario")}`]: r ? r.totalING : "",
           "Comprobación": r ? r.comprobacion : "",
         });
@@ -780,12 +783,13 @@ function exportBackup() {
       ["Gasolina (presupuesto medio)", params.gasolina],
       ["Suscripciones", params.suscripciones],
       ["Inversión automática", params.inversion],
+      ...(usaCol() ? [[`Aporte mensual al colchón (${cn("colchon")})`, params.aporteColchon]] : []),
       ["Ahorro fijo", params.ahorroFijo],
       ["Seguro del coche (importe)", params.seguroCoche],
       ["Meses del seguro", params.mesesSeguro.join(" y ")],
       ["Rodaje / ITV (importe)", params.rodaje],
       ["Mes del rodaje", params.mesRodaje],
-      ...(usaCol() ? [[`Colchón objetivo ${cn("colchon")}`, params.colchon]] : []),
+      ...(usaCol() ? [[`Colchón en ${cn("colchon")} (saldo antes de los aportes)`, params.colchon], [`Objetivo del colchón ${cn("colchon")}`, params.colchonObjetivo || ""]] : []),
       [`Saldo inicial ${cn("ahorro")}`, params.saldoSantander],
       ...(usaInv() ? [[`Saldo inicial ${cn("inversion")}`, params.saldoTradeRepublic]] : []),
       ...(params.fijos || []).map(f => [`Gasto fijo: ${f.nombre}`, f.importe]),
@@ -940,7 +944,7 @@ function extraMesesTexto(ex) {
   return MONTHS.filter(m => ex.meses.includes(m)).map(m => m.slice(0,3)).join(", ");
 }
 
-const CAMPOS_HISTORIAL = ["salarioBase","alquiler","compra","gasolina","suscripciones","peluqueria","inversion","ahorroFijo","seguroCoche","rodaje"];
+const CAMPOS_HISTORIAL = ["salarioBase","alquiler","compra","gasolina","suscripciones","peluqueria","inversion","aporteColchon","ahorroFijo","seguroCoche","rodaje"];
 function yearOf(mData) {
   if (mData._anio) return mData._anio;
   for (const y of Object.keys(monthsDataByYear)) if (monthsDataByYear[y].includes(mData)) return Number(y);
@@ -975,6 +979,7 @@ function calcMonth(mData) {
   const subsPelu = pv("suscripciones", mData); // (la peluquería ya no es un gasto fijo: se apunta en el Diario)
   const fijosPers = (params.fijos || []).reduce((a, f) => a + (Number(pv("fijo_" + f.id, mData)) || 0), 0);
   const inversion = usaInv() ? pv("inversion", mData) : 0;
+  const colchon = usaCol() ? (Number(pv("aporteColchon", mData)) || 0) : 0; // lo que va cada mes a la cuenta del colchón
   const ahorroFijo = pv("ahorroFijo", mData);
 
   let ocasional = 0;
@@ -983,7 +988,7 @@ function calcMonth(mData) {
   const extrasTotal = (params.extras || []).filter(ex => extraAplica(ex, mData.mes)).reduce((acc, ex) => acc + (Number(ex.importe) || 0), 0);
   ocasional += extrasTotal;
 
-  const totalFijosOcasional = fijosEsenciales + subsPelu + fijosPers + inversion + ahorroFijo + ocasional;
+  const totalFijosOcasional = fijosEsenciales + subsPelu + fijosPers + inversion + colchon + ahorroFijo + ocasional;
   // Gastos excepcionales: cada uno se carga a una cuenta. En el día a día (ING) se descuentan del ocio del mes;
   // en la de ahorro (Santander) salen directamente de ahí. Sin cuenta guardada = ahorro (como antes).
   const listaExc = excepcionalesDe(mData);
@@ -1011,16 +1016,17 @@ function calcMonth(mData) {
 
   const totalSantander = ahorroFijo + extraSantander + ajusteSantander - excSant;
   const totalTradeRepublic = inversion;
+  const totalColchon = colchon;
   const totalING = fijosEsencialesReal + subsPelu + fijosPers + ocasional + ocioRealGastado + excING;
 
-  const comprobacion = (salario + ingresosExtra) - (totalSantander + totalTradeRepublic + totalING) - excSant; // lo cargado directo a ahorro sale de ahí, no de la nómina
+  const comprobacion = (salario + ingresosExtra) - (totalSantander + totalTradeRepublic + totalColchon + totalING) - excSant; // lo cargado directo a ahorro sale de ahí, no de la nómina
 
   return {
-    fijosEsenciales, fijosEsencialesReal, subsPelu, fijosPers, inversion, ahorroFijo, ocasional, extrasTotal,
+    fijosEsenciales, fijosEsencialesReal, subsPelu, fijosPers, inversion, colchon, ahorroFijo, ocasional, extrasTotal,
     gastoRealGasolina, ajusteGasolina, gastoRealCompra, ajusteCompra, ingresosExtra, ingresosManual, ingresosDiarioMes, gastoExcepcional, excING, excSant,
     gastoExcepcionalNota, gastosExcepcionales: listaExc,
     totalFijosOcasional, ocioPresupuestado, extraSantander, ajuste: ajusteOcio,
-    ocioRealGastado, ajusteSantander, totalSantander, totalTradeRepublic,
+    ocioRealGastado, ajusteSantander, totalSantander, totalTradeRepublic, totalColchon,
     totalING, comprobacion,
   };
 }
@@ -1111,23 +1117,24 @@ function renderRepartoCard(mData) {
   if (params.usaReparto === false) return "";
   const inv = usaInv() ? (Number(pv("inversion", mData)) || 0) : 0;
   const aho = Number(pv("ahorroFijo", mData)) || 0;
+  const col = usaCol() ? (Number(pv("aporteColchon", mData)) || 0) : 0;
   const alq = Number(pv("alquiler", mData)) || 0;
   const ing = Number(params.repartoING) || 0;
   const tieneSal = !(mData.salario === null || mData.salario === undefined || mData.salario === "");
-  const resto = (Number(mData.salario) || 0) - inv - aho - ing;
+  const resto = (Number(mData.salario) || 0) - inv - col - aho - ing;
   const extra = Math.max((Number(mData.salario) || 0) - (Number(pv("salarioBase", mData)) || 0), 0);
   const normal = Math.max(resto - extra, 0);
   const h = mData.reparto || {};
   const paso = (k, titulo, cuerpo) => `<div class="step-rep${h[k] ? " done" : ""}"><div class="step-rep-h">${titulo}</div>${cuerpo}<label class="chk-rep"><input type="checkbox" data-rep="${k}" ${h[k] ? "checked" : ""}> Hecho este mes</label></div>`;
   const ln = (a, b) => `<div class="line-rep"><span>${a}</span><b>${b}</b></div>`;
-  const dia1 = [inv > 0 ? ln(`→ ${escapeHtml(cn("inversion"))} <span class="sub-rep">(inversión)</span>`, euro(inv)) : "", aho > 0 ? ln(`→ ${escapeHtml(cn("ahorro"))} <span class="sub-rep">(ahorro)</span>`, euro(aho)) : ""].join("");
+  const dia1 = [inv > 0 ? ln(`→ ${escapeHtml(cn("inversion"))} <span class="sub-rep">(inversión)</span>`, euro(inv)) : "", col > 0 ? ln(`→ ${escapeHtml(cn("colchon"))} <span class="sub-rep">(colchón)</span>`, euro(col)) : "", aho > 0 ? ln(`→ ${escapeHtml(cn("ahorro"))} <span class="sub-rep">(ahorro)</span>`, euro(aho)) : ""].join("");
   const pasos = [];
   if (dia1) pasos.push(paso("s1", "Día 1 · día de cobro", dia1));
   if (ing > 0) pasos.push(paso("s2", "Día 2 · el día siguiente", ln(`→ ${escapeHtml(cn("diario"))} <span class="sub-rep">(del día a día)</span>`, euro(ing)) + (alq > 0 ? `<div class="sub-rep">de ellos: ${euro(Math.min(alq, ing))} alquiler · ${euro(Math.max(ing - alq, 0))} gastos</div>` : "")));
   pasos.push(paso("s3", "Día 3 · el siguiente", tieneSal
     ? (extra > 0
         ? ln("Resto normal", euro(normal)) + ln(`Extra sobre el salario base <span class="sub-rep">→ ${escapeHtml(cn("ahorro"))} (ahorro)</span>`, euro(Math.min(extra, Math.max(resto, 0))))
-        : ln("Resto de la nómina", euro(Math.max(resto, 0)))) + `<div class="sub-rep">${euro(Number(mData.salario) || 0)} − ${euro(inv + aho + ing)}${resto < 0 ? " (el salario no llega a cubrir los pasos anteriores)" : ""}</div>`
+        : ln("Resto de la nómina", euro(Math.max(resto, 0)))) + `<div class="sub-rep">${euro(Number(mData.salario) || 0)} − ${euro(inv + col + aho + ing)}${resto < 0 ? " (el salario no llega a cubrir los pasos anteriores)" : ""}</div>`
     : `<div class="sub-rep">Escribe el salario de ${mData.mes} para ver cuánto es.</div>`));
   const hechos = pasos.length;
   const n = ["s1", "s2", "s3"].filter(k => h[k] && ((k === "s1" && dia1) || (k === "s2" && ing > 0) || k === "s3")).length;
@@ -1230,6 +1237,7 @@ function computeResultsHtml(mData) {
       <div class="result-row"><span class="label">Suscripciones</span><span class="value">${euro(r.subsPelu)}</span></div>
       ${(params.fijos || []).map(f => `<div class="result-row"><span class="label">${escapeHtml(f.nombre)}</span><span class="value">${euro(pv("fijo_" + f.id, mData))}</span></div>`).join("")}
       ${usaInv() ? `<div class="result-row"><span class="label">Inversión automática</span><span class="value">${euro(r.inversion)}</span></div>` : ""}
+      ${r.colchon > 0 ? `<div class="result-row"><span class="label">Aporte al colchón (${escapeHtml(cn("colchon"))})</span><span class="value">${euro(r.colchon)}</span></div>` : ""}
       <div class="result-row"><span class="label">Ahorro fijo</span><span class="value">${euro(r.ahorroFijo)}</span></div>
       <div class="result-row"><span class="label">Gastos ocasionales coche</span><span class="value">${euro(r.ocasional - r.extrasTotal)}</span></div>
       ${(params.extras || []).some(ex => extraAplica(ex, mData.mes)) ? `
@@ -1253,6 +1261,7 @@ function computeResultsHtml(mData) {
       <div class="dest-grid">
         <div class="dest-card ing"><span class="name">${cn("diario")} · gastos diarios</span><span class="amount">${euro0(r.totalING)}</span></div>
         ${usaInv() ? `<div class="dest-card tr"><span class="name">${cn("inversion")} · inversión</span><span class="amount">${euro0(r.totalTradeRepublic)}</span></div>` : ""}
+        ${r.totalColchon > 0 ? `<div class="dest-card tr"><span class="name">${cn("colchon")} · colchón</span><span class="amount">${euro0(r.totalColchon)}</span></div>` : ""}
         <div class="dest-card san ${sanNeg ? "negative" : ""}"><span class="name">${cn("ahorro")} · ahorro</span><span class="amount">${euro0(r.totalSantander)}</span></div>
       </div>
       ${sanNeg
@@ -1279,6 +1288,24 @@ function renderComparisonRow(r) {
 
 // ---------- Comprobar el saldo real de la cuenta de ahorro ----------
 let compResultado = null; // {real, calculado, diff} de la última comprobación hecha en esta sesión
+function renderColchonCard(gastoMes) {
+  const saldo = (Number(params.colchon) || 0) + sumAllYears(r => r.totalColchon || 0);
+  const obj = Number(params.colchonObjetivo) || 0;
+  const pct = obj > 0 ? Math.min(100, Math.max(0, saldo / obj * 100)) : 0;
+  const meses = gastoMes > 0 ? saldo / gastoMes : 0;
+  const aporte = Number(params.aporteColchon) || 0;
+  return `
+    <div class="section-title">Colchón en ${escapeHtml(cn("colchon"))}</div>
+    <div class="card">
+      <div class="result-row"><span class="label">Tienes en el colchón</span><span class="value">${euro(saldo)}</span></div>
+      ${obj > 0 ? `<div class="cat-bar-bg" style="margin:6px 0 4px;"><div class="cat-bar-fill" style="width:${pct.toFixed(1)}%; background:var(--gold);"></div></div>
+      <div style="font-size:12px; color:var(--gray); margin-bottom:6px;">${saldo >= obj ? "✓ Objetivo alcanzado" : `Faltan ${euro(obj - saldo)} para tu objetivo de ${euro(obj)} (${pct.toFixed(0)} %)`}</div>` : ""}
+      <div class="result-row"><span class="label">Cubre ${meses.toLocaleString("es-ES", { maximumFractionDigits: 1 })} meses de gastos esenciales</span><span class="value"></span></div>
+      <div class="result-row"><span class="label">Aporte mensual ahora</span><span class="value">${euro(aporte)}</span></div>
+      <p style="font-size:11.5px; color:var(--gray); margin:8px 0 0;">Es lo que indicaste en Ajustes («Colchón que tienes») más lo que apartas cada mes. Si no coincide con el banco, corrígelo en Ajustes.</p>
+    </div>`;
+}
+
 function renderComprobarSaldo(saldoCalc) {
   const hist = (params.comprobaciones || []).slice(-5).reverse();
   const r = compResultado;
@@ -1409,7 +1436,7 @@ function renderResumen() {
   const count = filled.filter(Boolean).length;
 
   const salarioTotal = monthsData.reduce((acc, m) => acc + (m.salario ? Number(m.salario) : 0), 0);
-  const fijosTotal = sum(r => r.fijosEsencialesReal + r.subsPelu + r.fijosPers + r.inversion + r.ocasional);
+  const fijosTotal = sum(r => r.fijosEsencialesReal + r.subsPelu + r.fijosPers + r.inversion + r.colchon + r.ocasional);
   const inversionTotal = sum(r => r.totalTradeRepublic);
   const santanderTotal = sum(r => r.totalSantander);
   const ingTotal = sum(r => r.totalING);
@@ -1417,7 +1444,7 @@ function renderResumen() {
   const ratioFijos = salarioTotal ? fijosTotal / salarioTotal : 0;
   const ratioInversion = salarioTotal ? inversionTotal / salarioTotal : 0;
   const fijosEsencialesMes = params.alquiler + params.compra + params.gasolina + (params.fijos || []).reduce((a, f) => a + (Number(f.importe) || 0), 0);
-  const mesesColchon = fijosEsencialesMes ? params.colchon / fijosEsencialesMes : 0;
+  const mesesColchon = fijosEsencialesMes ? ((Number(params.colchon) || 0) + sumAllYears(r => r.totalColchon || 0)) / fijosEsencialesMes : 0;
 
   // Los saldos arrastran lo acumulado en años anteriores, no empiezan de cero cada enero.
   const prior = priorYearsContribution(activeYear);
@@ -1479,6 +1506,8 @@ function renderResumen() {
     <div class="card">
       ${renderOverspendList(filled)}
     </div>
+
+    ${usaCol() ? renderColchonCard(fijosEsencialesMes) : ""}
 
     <div class="section-title no-print">Comprobar saldo de ${cn("ahorro")}</div>
     <div class="card no-print" id="comp-card">
@@ -1585,6 +1614,7 @@ function renderCategoryBreakdown(filled) {
     { n: "Ocio", v: sum(r => Math.max(0, r.ocioRealGastado)), c: "var(--light-gray)" },
     { n: "Gastos excepcionales", v: sum(r => r.gastoExcepcional), c: "var(--red)" },
     { n: `Inversión (${cn("inversion")})`, v: sum(r => r.inversion), c: "var(--teal)" },
+    { n: `Colchón (${cn("colchon")})`, v: sum(r => r.colchon), c: "var(--gold)" },
   ].filter(c => c.v > 0.005);
   const total = cats.reduce((a, c) => a + c.v, 0);
   if (!total) return `<p style="font-size:13px; color:var(--gray); margin:0;">Aún no hay meses con datos en ${activeYear}.</p>`;
@@ -1682,7 +1712,7 @@ function renderGoalsSection(saldoActual) {
   `;
 }
 
-const NOMBRES_CAMPOS = { salarioBase:"Salario base", alquiler:"Alquiler", compra:"Compra", gasolina:"Gasolina", suscripciones:"Suscripciones", peluqueria:"Peluquería", inversion:"Inversión", ahorroFijo:"Ahorro fijo", seguroCoche:"Seguro del coche", rodaje:"Rodaje / ITV" };
+const NOMBRES_CAMPOS = { salarioBase:"Salario base", alquiler:"Alquiler", compra:"Compra", gasolina:"Gasolina", suscripciones:"Suscripciones", peluqueria:"Peluquería", inversion:"Inversión", aporteColchon:"Aporte al colchón", ahorroFijo:"Ahorro fijo", seguroCoche:"Seguro del coche", rodaje:"Rodaje / ITV" };
 function periodoTexto(key) { return MONTHS[(key % 100) - 1] + " " + Math.floor(key / 100); }
 const AJUSTE_OPC = [["", "Ninguno"], ["ocio", "→ Ocio"], ["gasolina", "→ Gasolina"], ["compra", "→ Compra"]];
 function renderCatsEditor() {
@@ -1847,7 +1877,8 @@ function renderAjustes() {
         <div class="field"><label>Saldo inicial ${escapeHtml(cn("ahorro"))}</label><div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="p-saldoSantander" placeholder="0" value="${p.saldoSantander}"><button type="button" class="sign-btn" data-sign="p-saldoSantander" aria-label="Cambiar signo (más o menos)">±</button></div></div>
         ${usaInv() ? `<div class="field"><label>Saldo inicial ${escapeHtml(cn("inversion"))}</label><div class="signed-wrap"><input type="text" class="signed-input" inputmode="decimal" pattern="-?[0-9]*[.,]?[0-9]*" autocomplete="off" id="p-saldoTradeRepublic" placeholder="0" value="${p.saldoTradeRepublic}"><button type="button" class="sign-btn" data-sign="p-saldoTradeRepublic" aria-label="Cambiar signo (más o menos)">±</button></div></div>` : ""}
       </div>
-      ${usaCol() ? `<div class="field"><label>Colchón objetivo ${escapeHtml(cn("colchon"))}</label><input type="number" step="0.01" id="p-colchon" value="${p.colchon}"></div>` : ""}
+      ${usaCol() ? `<div class="field"><label>Colchón que tienes en ${escapeHtml(cn("colchon"))} <span class="hint">Lo que hay ahí ahora; el aporte de cada mes se suma a esto (se ve en Resumen)</span></label><input type="number" step="0.01" id="p-colchon" value="${p.colchon}"></div>
+      <div class="field"><label>Objetivo del colchón (opcional) <span class="hint">Para ver cuánto te falta · déjalo en 0 si no tienes objetivo</span></label><input type="number" step="0.01" id="p-colchonObjetivo" value="${p.colchonObjetivo || 0}"></div>` : ""}
     </div>
 
     <div class="section-title">Gastos fijos mensuales</div>
@@ -1868,6 +1899,7 @@ function renderAjustes() {
         <div class="field"><label>Suscripciones <span class="hint">Se calcula solo con «Mis suscripciones» (más abajo)</span></label><input type="number" step="0.01" id="p-suscripciones" value="${p.suscripciones}" readonly tabindex="-1" style="opacity:.75; cursor:not-allowed;"></div>
       </div>
       ${usaInv() ? `<div class="field"><label>Inversión automática</label><input type="number" step="0.01" id="p-inversion" value="${p.inversion}"></div>` : ""}
+      ${usaCol() ? `<div class="field"><label>Colchón (${escapeHtml(cn("colchon"))}) <span class="hint">Lo que apartas cada mes a esa cuenta · 0 = nada por ahora · baja el ocio igual que la inversión</span></label><input type="number" step="0.01" id="p-aporteColchon" value="${p.aporteColchon || 0}"></div>` : ""}
       <div class="field"><label>Ahorro fijo (${cn("ahorro")})</label><input type="number" step="0.01" id="p-ahorroFijo" value="${p.ahorroFijo}"></div>
     </div>
 
@@ -2235,8 +2267,8 @@ function attachHandlers() {
 
   const paramFieldMap = {
     "p-salarioBase":"salarioBase","p-saldoSantander":"saldoSantander","p-saldoTradeRepublic":"saldoTradeRepublic",
-    "p-colchon":"colchon","p-alquiler":"alquiler","p-compra":"compra","p-gasolina":"gasolina",
-    "p-inversion":"inversion","p-repartoING":"repartoING",
+    "p-colchon":"colchon","p-colchonObjetivo":"colchonObjetivo","p-alquiler":"alquiler","p-compra":"compra","p-gasolina":"gasolina",
+    "p-inversion":"inversion","p-aporteColchon":"aporteColchon","p-repartoING":"repartoING",
     "p-ahorroFijo":"ahorroFijo","p-seguroCoche":"seguroCoche","p-rodaje":"rodaje",
   };
   function aplicarCambioImporte(key, nuevo) {
