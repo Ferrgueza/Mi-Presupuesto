@@ -690,22 +690,116 @@ async function storageGetByPrefix(prefix) {
   }
   return out;
 }
-async function loadGastos() {
-  gastosByYear = {};
-  const all = await storageGetByPrefix("finanzas_gastos_");
-  Object.entries(all).forEach(([k, v]) => {
-    try { const arr = JSON.parse(v); if (Array.isArray(arr)) gastosByYear[k.replace("finanzas_gastos_", "")] = arr; } catch (e) {}
-  });
+// ---------- Protección contra pérdida de datos ----------
+let datosDeCache = false, cargaEnCurso = null;
+const aniosPendientes = new Set();   // años cuyo último guardado no llegó a la nube
+const idsBorrados = new Set();       // gastos que el usuario ha borrado en esta sesión (para no "recuperarlos" por error)
+const conTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
+// Lectura FRESCA del servidor (no de la copia del móvil, que puede estar desfasada).
+async function leerDocNube() {
+  const doc = await conTimeout(db.collection("presupuestos").doc(currentUser.uid).get({ source: "server" }), 8000);
+  return doc.exists ? doc.data() : {};
 }
-async function saveGastosYear(y) {
-  return guardarClave("finanzas_gastos_" + y, JSON.stringify(gastosByYear[y] || []));
+// Lee todo de una sola vez, para que los datos sean una foto coherente.
+async function leerTodo() {
+  if (FIREBASE_CONFIGURED && currentUser) {
+    try { const d = await leerDocNube(); datosDeCache = false; return d; }
+    catch (e) {
+      try { const doc = await db.collection("presupuestos").doc(currentUser.uid).get(); datosDeCache = true; return doc.exists ? doc.data() : {}; }
+      catch (e2) { console.error("Error leyendo de Firestore", e2); cloudReadFailed = true; lastCloudError = e2; return null; }
+    }
+  }
+  const data = {};
+  for (const k of ["finanzas_parametros", "finanzas_meses", "finanzas_objetivos"]) { const v = await storageGet(k); if (v) data[k] = v; }
+  Object.assign(data, await storageGetByPrefix("finanzas_gastos_"));
+  return data;
+}
+function parseGastos(data) {
+  const out = {};
+  Object.entries(data).filter(([k]) => k.startsWith("finanzas_gastos_")).forEach(([k, v]) => {
+    try { const arr = JSON.parse(v); if (Array.isArray(arr)) out[k.replace("finanzas_gastos_", "")] = arr; } catch (e) {}
+  });
+  return out;
+}
+// Copia de seguridad local (en este móvil/navegador) de los gastos: red de seguridad por si la nube se pisa.
+const snapKey = (s) => "mp_snap_" + s + "_" + (currentUser ? currentUser.uid : "local");
+const totalGastos = (o) => Object.values(o).reduce((a, arr) => a + (Array.isArray(arr) ? arr.length : 0), 0);
+function guardarSnapshot() {
+  try {
+    const n = totalGastos(gastosByYear); if (!n) return;
+    const snap = JSON.stringify({ t: Date.now(), n, data: gastosByYear });
+    localStorage.setItem(snapKey("ult"), snap);
+    const mx = JSON.parse(localStorage.getItem(snapKey("max")) || "null");
+    if (!mx || n >= mx.n) localStorage.setItem(snapKey("max"), snap);
+  } catch (e) {}
+}
+function borrarSnapshots() { try { localStorage.removeItem(snapKey("ult")); localStorage.removeItem(snapKey("max")); } catch (e) {} }
+async function esperarCarga() { if (cargaEnCurso) { try { await cargaEnCurso; } catch (e) {} } }
+
+async function saveGastosYear(y, opts) {
+  y = String(y);
+  await esperarCarga();
+  const key = "finanzas_gastos_" + y;
+  const reemplazo = !!(opts && opts.reemplazo);
+  if (!reemplazo && FIREBASE_CONFIGURED && currentUser) {
+    // Antes de guardar, mira qué hay AHORA en la nube y no pises nada que esta pantalla no conozca.
+    let srv = [];
+    try {
+      const data = await leerDocNube();
+      if (data[key]) { const arr = JSON.parse(data[key]); if (Array.isArray(arr)) srv = arr; }
+    } catch (e) {
+      lastCloudError = e; aniosPendientes.add(y);
+      showToast("📴 Sin conexión estable: este cambio del Diario NO se ha guardado todavía (para no pisar tus datos). Se enviará solo cuando vuelva la señal.", true, 9000);
+      return false;
+    }
+    const local = gastosByYear[y] || [];
+    const ids = new Set(local.map(g => g.id));
+    const faltan = srv.filter(g => g && !ids.has(g.id) && !idsBorrados.has(g.id));
+    if (faltan.length) {
+      gastosByYear[y] = [...local, ...faltan];
+      if (typeof render === "function" && ready) render();
+      showToast(`🛟 Se han conservado ${faltan.length} gastos que esta pantalla no tenía cargados.`, false, 5000);
+    }
+  }
+  const ok = await guardarClave(key, JSON.stringify(gastosByYear[y] || []));
+  if (ok) { aniosPendientes.delete(y); guardarSnapshot(); } else aniosPendientes.add(y);
+  return ok;
+}
+// Reintenta lo que no pudo guardarse (al volver la conexión o la app).
+async function reintentarPendientes() {
+  if (!aniosPendientes.size || !ready || navigator.onLine === false) return;
+  for (const y of [...aniosPendientes]) await saveGastosYear(y);
+}
+// Recupera gastos guardados en este móvil que ya no están en la app (solo añade los que faltan).
+async function recuperarGastosDelMovil() {
+  const msg = document.getElementById("snap-msg");
+  const aviso = (t, color) => { if (msg) { msg.style.display = "block"; msg.style.color = color || "var(--gray)"; msg.textContent = t; } };
+  const fuentes = ["max", "ult"].map(s => { try { return JSON.parse(localStorage.getItem(snapKey(s)) || "null"); } catch (e) { return null; } }).filter(Boolean);
+  const existentes = new Set(Object.values(gastosByYear).flat().map(g => g.id));
+  const nuevos = {}; let n = 0;
+  fuentes.forEach(sn => Object.entries(sn.data || {}).forEach(([y, arr]) => (Array.isArray(arr) ? arr : []).forEach(g => {
+    if (g && !existentes.has(g.id)) { existentes.add(g.id); (nuevos[y] = nuevos[y] || []).push(g); n++; }
+  })));
+  if (!n) { aviso("No hay en este móvil ningún gasto que no tengas ya en la app."); return; }
+  if (!confirm(`Hay ${n} gastos guardados en este móvil que ahora no están en la app. ¿Recuperarlos?`)) return;
+  Object.entries(nuevos).forEach(([y, arr]) => { gastosByYear[y] = [...(gastosByYear[y] || []), ...arr]; arr.forEach(g => idsBorrados.delete(g.id)); });
+  render();
+  for (const y of Object.keys(nuevos)) await saveGastosYear(y);
+  showToast(`Recuperados ${n} gastos`);
 }
 
 async function loadData() {
+  if (cargaEnCurso) return cargaEnCurso;
+  cargaEnCurso = _loadData().finally(() => { cargaEnCurso = null; });
+  return cargaEnCurso;
+}
+async function _loadData() {
   cloudReadFailed = false;
-  const p = await storageGet("finanzas_parametros");
+  const data = await leerTodo();
+  if (data === null) return;   // no se pudo leer: no tocamos nada de lo que hay en pantalla
+  const p = data["finanzas_parametros"];
   if (p) { try { params = { ...DEFAULT_PARAMS, ...JSON.parse(p) }; } catch (e) {} }
-  const m = await storageGet("finanzas_meses");
+  const m = data["finanzas_meses"];
   if (m) {
     try {
       const parsed = JSON.parse(m);
@@ -719,9 +813,10 @@ async function loadData() {
   }
   migrarExcepcionales();
   monthsData = getMonthsForYear(activeYear);
-  const g = await storageGet("finanzas_objetivos");
+  const g = data["finanzas_objetivos"];
   if (g) { try { goals = JSON.parse(g); } catch (e) {} }
-  await loadGastos();
+  gastosByYear = parseGastos(data);   // se cambia de golpe, nunca queda vacío "a medias"
+  guardarSnapshot();
   applyTheme(params.tema);
   applyDarkMode(!!params.modoOscuro);
 }
@@ -851,7 +946,7 @@ async function restaurarCopia(file) {
     monthsData = getMonthsForYear(activeYear);
     applyTheme(params.tema); applyDarkMode(!!params.modoOscuro);
     await saveParams(); await saveMonths(); await saveGoals();
-    for (const y of new Set([...aniosViejos, ...Object.keys(gastosByYear)])) await saveGastosYear(y);
+    for (const y of new Set([...aniosViejos, ...Object.keys(gastosByYear)])) await saveGastosYear(y, { reemplazo: true });
     render();
     showToast("Copia restaurada");
   } catch (e) {
@@ -1083,9 +1178,9 @@ function renderAvisoTamano() {
   return `<div class="warn-banner no-print" id="aviso-tamano">📦 <span><strong>Tus datos ocupan ${kb(n)} de ${kb(LIMITE_BYTES)} (${pct.toFixed(0)}%).</strong> Cuando se llene, la app dejará de guardar. Descarga una copia de seguridad y avísame para repartir los datos antes de que llegue.</span></div>`;
 }
 
-// Aviso para descargar la copia de seguridad si hace más de 30 días (o nunca, y ya hay gastos apuntados).
+// Aviso para descargar la copia de seguridad si hace 7 días o más (o nunca, y ya hay gastos apuntados).
 function renderAvisoCopia() {
-  const DIAS = 30, hoy = new Date(hoyISO() + "T12:00:00");
+  const DIAS = 7, hoy = new Date(hoyISO() + "T12:00:00");
   let ref = params.ultimaCopia || "";
   let nunca = false;
   if (!ref) {
@@ -2009,6 +2104,9 @@ function renderAjustes() {
       <input type="file" id="restore-file" accept=".xlsx" style="display:none;">
       <button class="btn secondary" id="btn-restore" type="button" style="color:var(--fg); border-color:var(--border);">⬆️ Restaurar desde una copia (Excel)</button>
       <p id="restore-msg" style="font-size:12.5px; margin:10px 0 0; display:none;"></p>
+      <p style="font-size:12.5px; color:var(--gray); margin:16px 0 10px;">Además, la app guarda sola una copia de tus gastos del Diario en este móvil. Si algún día faltan gastos, este botón los recupera (solo añade los que no estén).</p>
+      <button class="btn secondary" id="btn-snap" type="button" style="color:var(--fg); border-color:var(--border);">🛟 Recuperar gastos guardados en este móvil</button>
+      <p id="snap-msg" style="font-size:12.5px; margin:10px 0 0; display:none;"></p>
     </div>
 
     <button class="btn secondary" id="btn-reset">Borrar todos mis datos</button>
@@ -2377,6 +2475,9 @@ function attachHandlers() {
   const restBtn = document.getElementById("btn-restore"), restFile = document.getElementById("restore-file");
   if (restBtn) { restBtn.onclick = () => restFile.click(); restFile.onchange = () => { if (restFile.files[0]) restaurarCopia(restFile.files[0]); restFile.value = ""; }; }
 
+  const snapBtn = document.getElementById("btn-snap");
+  if (snapBtn) snapBtn.onclick = recuperarGastosDelMovil;
+
   const logoutBtn = document.getElementById("btn-logout");
   if (logoutBtn) logoutBtn.onclick = () => { if (auth) auth.signOut(); };
 
@@ -2391,6 +2492,7 @@ function attachHandlers() {
     const anios = Object.keys(gastosByYear);
     gastosByYear = {};
     for (const y of anios) await guardarClave("finanzas_gastos_" + y, "[]");
+    borrarSnapshots();
     await saveParams();
     await saveMonths();
     await saveGoals();
@@ -2968,6 +3070,7 @@ async function importarGastosArchivo(file) {
       (dup ? `. ${dup} ya estaban y se saltan` : "") + `. Se dejan fuera ${r.excl.ingresos} ingresos y ${r.excl.noGasto} movimientos de transferencia/saldo. ¿Continuar?`;
     if (!confirm(txt)) { aviso("Importación cancelada."); return; }
 
+    await esperarCarga();
     const tocados = new Set();
     nuevos.forEach(g => { const a = g.fecha.slice(0, 4); (gastosByYear[a] = gastosByYear[a] || []).push(g); tocados.add(a); });
     if (nuevasCats.length) { params.categorias = cats; }
@@ -3035,9 +3138,11 @@ function attachGastosHandlers() {
     const fecha = document.getElementById("g-fecha").value;
     const cat = document.getElementById("g-cat").value;
     if (cat === "__nueva__") { alert("Elige una categoría."); return; }
+    const textoEscrito = concepto.value.trim();
+    await esperarCarga();   // si justo se están recargando los datos, esperamos (y ya hemos leído lo escrito)
     const editandoReg = gastoEditId ? Object.values(gastosByYear).flat().find(g => g.id === gastoEditId) : null;
     const esIng = editandoReg ? esIngreso(editandoReg) : gastoTipo === "ingreso";
-    let texto = concepto.value.trim();
+    let texto = textoEscrito;
     if (!importe || importe <= 0) { alert("Escribe un importe mayor que 0."); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) { alert("Elige una fecha."); return; }
     if (!texto) texto = catDe(cat).n;
@@ -3049,7 +3154,7 @@ function attachGastosHandlers() {
     if (gastoEditId) {
       Object.keys(gastosByYear).forEach(a => {
         const i = gastosByYear[a].findIndex(g => g.id === gastoEditId);
-        if (i >= 0) { gastosByYear[a].splice(i, 1); tocados.add(a); }
+        if (i >= 0) { gastosByYear[a].splice(i, 1); tocados.add(a); if (a !== anioNuevo) idsBorrados.add(gastoEditId); }
       });
     }
     gastosByYear[anioNuevo] = [...(gastosByYear[anioNuevo] || []), nuevo];
@@ -3114,9 +3219,11 @@ function bindGastosLista() {
     gastoEditId = Number(b.dataset.gEdit); render(); window.scrollTo({ top: 0, behavior: "smooth" });
   });
   document.querySelectorAll("[data-g-del]").forEach(b => b.onclick = async () => {
+    await esperarCarga();
     const id = Number(b.dataset.gDel);
     const reg = Object.values(gastosByYear).flat().find(g => g.id === id);
     if (!reg) return;
+    idsBorrados.add(id);
     const tocados = [];
     Object.keys(gastosByYear).forEach(a => {
       const n = gastosByYear[a].length;
@@ -3142,6 +3249,8 @@ function ocultarDeshacer() { clearTimeout(undoTimer); ultimoBorrado = null; cons
 document.getElementById("undo-btn").onclick = async () => {
   const reg = ultimoBorrado; if (!reg) return;
   ocultarDeshacer();
+  await esperarCarga();
+  idsBorrados.delete(reg.id);
   const a = String(reg.fecha.slice(0, 4));
   gastosByYear[a] = gastosByYear[a] || [];
   if (!gastosByYear[a].some(g => g.id === reg.id)) gastosByYear[a].push(reg);
@@ -3180,13 +3289,19 @@ let _ultimoDia = new Date().toDateString();
   window.addEventListener("offline", act); window.addEventListener("online", act); act();
 })();
 window.addEventListener("pagehide", () => { flushAutosave(); });
+window.addEventListener("online", async () => {
+  if (!ready) return;
+  await reintentarPendientes();
+  if (datosDeCache && !aniosPendientes.size && !pendingSaves && !_autosaveTimer) { await loadData(); monthsData = getMonthsForYear(activeYear); render(); }
+});
 document.addEventListener("visibilitychange", async () => {
   if (document.visibilityState === "hidden") { flushAutosave(); return; }
   if (document.visibilityState !== "visible" || !ready) return;
   // Al volver a la app, recarga los datos de la nube (por si cambiaste algo desde otro dispositivo)
   const el = document.activeElement;
   const escribiendo = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT");
-  if (FIREBASE_CONFIGURED && currentUser && !pendingSaves && !escribiendo && navigator.onLine !== false) {
+  if (aniosPendientes.size) { await reintentarPendientes(); }
+  if (FIREBASE_CONFIGURED && currentUser && !pendingSaves && !aniosPendientes.size && !_autosaveTimer && !escribiendo && navigator.onLine !== false) {
     await loadData();
     monthsData = getMonthsForYear(activeYear);
     render();
