@@ -224,6 +224,8 @@
   .dest-card.san{background:var(--gold);}
   .dest-card.san.negative{background:var(--red);}
 
+  .aviso-copia{background:var(--red); color:#fff; border-radius:10px; padding:12px; font-size:13px; margin-bottom:12px; line-height:1.4;}
+  .aviso-copia .btn{background:#fff; color:var(--red); border:0; font-weight:700;}
   .warn-banner{
     background:var(--red-bg); color:var(--red); border:1px solid var(--warn-border);
     border-radius:10px; padding:10px 12px; font-size:12.5px; margin-top:10px; font-weight:600;
@@ -826,8 +828,7 @@ async function saveParams() { return guardarClave("finanzas_parametros", JSON.st
 async function saveMonths() { return guardarClave("finanzas_meses", JSON.stringify(monthsDataByYear)); }
 async function saveGoals() { return guardarClave("finanzas_objetivos", JSON.stringify(goals)); }
 
-function exportBackup() {
-  try {
+function construirLibro() {
     const wb = XLSX.utils.book_new();
 
     // --- Hoja Meses (TODOS los años guardados, no solo el que tienes abierto) ---
@@ -905,15 +906,46 @@ function exportBackup() {
     const wsRest = XLSX.utils.aoa_to_sheet([["Parte", "Datos para restaurar (no editar)"], ...trozos]);
     XLSX.utils.book_append_sheet(wb, wsRest, "Datos_restaurar");
 
+    return wb;
+}
+function marcarCopiaHecha(fecha) {
+  params.ultimaCopia = fecha; saveParams();
+  showToast("✅ Copia guardada");
+  if (typeof render === "function" && ready) render();
+}
+// Descarga directa del Excel (PC o si el móvil no deja compartir).
+function exportBackup() {
+  try {
+    const wb = construirLibro();
     const fecha = new Date().toISOString().slice(0, 10);
     XLSX.writeFile(wb, `Backup_Presupuesto_${fecha}.xlsx`);
-    params.ultimaCopia = fecha; saveParams();
-    showToast();
-    if (typeof render === "function" && ready) render();
+    marcarCopiaHecha(fecha);
   } catch (e) {
     console.error("Error exportando backup", e);
     alert("No se ha podido generar el Excel. Comprueba tu conexión e inténtalo de nuevo.");
   }
+}
+// En el móvil abre el menú de compartir para guardar el Excel en Archivos, iCloud, Dropbox, Drive…
+async function compartirCopia() {
+  let wb;
+  const fecha = new Date().toISOString().slice(0, 10), nombre = `Backup_Presupuesto_${fecha}.xlsx`;
+  try { wb = construirLibro(); }
+  catch (e) { console.error("Error exportando backup", e); alert("No se ha podido generar el Excel. Comprueba tu conexión e inténtalo de nuevo."); return; }
+  try {
+    if (navigator.share && navigator.canShare) {
+      const data = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const file = new File([data], nombre, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: nombre });
+        marcarCopiaHecha(fecha); return;
+      }
+    }
+  } catch (e) {
+    if (e && e.name === "AbortError") return;   // cerró el menú sin guardar: no cuenta como copia
+    console.warn("No se pudo compartir, se descarga", e);
+  }
+  try { XLSX.writeFile(wb, nombre); marcarCopiaHecha(fecha); showToast("Tu navegador no deja compartir: se ha descargado el Excel", false, 4000); }
+  catch (e) { alert("No se ha podido guardar el Excel."); }
 }
 // Restaurar una copia de seguridad descargada con «Descargar copia de seguridad».
 async function restaurarCopia(file) {
@@ -1190,8 +1222,8 @@ function renderAvisoCopia() {
   }
   const dias = Math.floor((hoy - new Date(ref + "T12:00:00")) / 86400000);
   if (!(dias >= DIAS)) return "";
-  const txt = nunca ? "Todavía no has descargado ninguna copia de seguridad." : `Hace ${dias} días que no descargas la copia de seguridad.`;
-  return `<div class="warn-banner no-print" id="aviso-copia">💾 <span><strong>${txt}</strong> Es la única protección si algo falla o se borra por error.</span><button class="btn small" id="btn-aviso-copia" type="button" style="margin-top:8px;">Descargar ahora</button></div>`;
+  const txt = nunca ? "Todavía no has guardado ninguna copia de seguridad." : `Hace ${dias} días que no guardas una copia de seguridad.`;
+  return `<div class="aviso-copia no-print" id="aviso-copia">💾 <span><strong>${txt}</strong> Guárdala en Archivos, iCloud, Dropbox o Drive: es la única protección fuera del móvil si algo falla o se borra.</span><button class="btn small" id="btn-aviso-copia" type="button" style="margin-top:8px;">📤 Guardar copia ahora</button></div>`;
 }
 
 // ---------- Reparto de la nómina (lista para ir marcando; no mueve dinero ni cambia cálculos) ----------
@@ -1257,7 +1289,6 @@ function renderMensual() {
   ` : "";
 
   return `
-    ${renderAvisoCopia()}
     ${renderAvisoTamano()}
     ${renderYearSwitch()}
     <div class="month-scroller">${pills}</div>
@@ -2098,8 +2129,9 @@ function renderAjustes() {
     <div class="section-title">Copia de seguridad</div>
     <div class="card">
       <p style="font-size:12px; color:var(--light-gray); margin:0 0 10px;">Espacio usado: <strong id="uso-datos">${kb(tamanoDatos())}</strong> de ${kb(LIMITE_BYTES)} (${(tamanoDatos() / LIMITE_BYTES * 100).toFixed(1)}%).${params.ultimaCopia ? " Última copia: " + params.ultimaCopia + "." : ""}</p>
-      <p style="font-size:12.5px; color:var(--gray); margin:0 0 12px;">Descarga un Excel con todos tus datos tal y como están ahora mismo (meses, parámetros y objetivos). No hay backup automático real: los navegadores no permiten guardar en tus archivos sin que tú lo pidas, así que descárgalo cuando quieras tener una copia al día.</p>
-      <button class="btn" id="btn-export">⬇️ Descargar copia de seguridad (Excel)</button>
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 12px;">Guarda un Excel con todos tus datos tal y como están ahora mismo. En el móvil se abre el menú de compartir para elegir dónde dejarlo (Archivos, iCloud, Dropbox, Drive…). Cada 7 días la app te lo recuerda en rojo arriba del Diario.</p>
+      <button class="btn" id="btn-share" style="margin-bottom:8px;">📤 Guardar copia en Archivos / Dropbox / Drive</button>
+      <button class="btn secondary" id="btn-export" style="color:var(--fg); border-color:var(--border);">⬇️ Descargar copia de seguridad (Excel)</button>
       <p style="font-size:12.5px; color:var(--gray); margin:16px 0 10px;">¿Has perdido datos? Sube una copia descargada con el botón de arriba y todo vuelve a como estaba ese día. Sustituye lo que tienes ahora.</p>
       <input type="file" id="restore-file" accept=".xlsx" style="display:none;">
       <button class="btn secondary" id="btn-restore" type="button" style="color:var(--fg); border-color:var(--border);">⬆️ Restaurar desde una copia (Excel)</button>
@@ -2469,9 +2501,11 @@ function attachHandlers() {
   if (mr) mr.onchange = () => { params.mesRodaje = mr.value; saveParams(); };
 
   const avisoCopia = document.getElementById("btn-aviso-copia");
-  if (avisoCopia) avisoCopia.onclick = exportBackup;
+  if (avisoCopia) avisoCopia.onclick = compartirCopia;
   const exportBtn = document.getElementById("btn-export");
   if (exportBtn) exportBtn.onclick = exportBackup;
+  const shareBtn = document.getElementById("btn-share");
+  if (shareBtn) shareBtn.onclick = compartirCopia;
   const restBtn = document.getElementById("btn-restore"), restFile = document.getElementById("restore-file");
   if (restBtn) { restBtn.onclick = () => restFile.click(); restFile.onchange = () => { if (restFile.files[0]) restaurarCopia(restFile.files[0]); restFile.value = ""; }; }
 
@@ -2798,6 +2832,7 @@ function renderGastos() {
   const maxCat = cats.length ? porCat[cats[0].id] : 1;
 
   return `
+    ${renderAvisoCopia()}
     <div class="year-switch">
       <button id="g-prev" aria-label="Mes anterior">‹</button>
       <span class="year-label">${MONTHS[m]} ${y}</span>
