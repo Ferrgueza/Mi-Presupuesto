@@ -497,7 +497,9 @@ const DEFAULT_PARAMS = {
   abrirEnDiario: false, // abrir la app directamente en la pestaña Diario
   usaReparto: true, // mostrar en Mensual la lista «Reparto de la nómina»
   repartoING: 600,  // lo que se pasa a la cuenta del día a día el día 2
-  subsLista: [],    // control de suscripciones (solo informativo): [{id,nombre,importe,frec:"mensual"|"anual",dia,mes}]
+  subsLista: [],    // control de suscripciones: [{id,nombre,importe,frec:"mensual"|"anual",dia,mes}]
+  subsDesde: null,  // fecha (AAAA-MM-DD) desde la que se apuntan solas en el Diario (categoría «Suscripciones»)
+  subsAutoOmitidas: [], // cobros automáticos que el usuario borró a propósito (no se vuelven a crear)
   fijos: [],        // gastos fijos propios (todos los meses, con cambios con fecha): [{id, nombre, importe}]
   tema: "navy",      // tema de color elegido
   modoOscuro: false, // modo oscuro
@@ -743,28 +745,38 @@ async function saveGastosYear(y, opts) {
   await esperarCarga();
   const key = "finanzas_gastos_" + y;
   const reemplazo = !!(opts && opts.reemplazo);
-  if (!reemplazo && FIREBASE_CONFIGURED && currentUser) {
-    // Antes de guardar, mira qué hay AHORA en la nube y no pises nada que esta pantalla no conozca.
-    let srv = [];
+  if (!reemplazo && FIREBASE_CONFIGURED && currentUser && !cloudReadFailed) {
+    const ref = db.collection("presupuestos").doc(currentUser.uid);
+    // Antes de guardar, lee lo que hay AHORA en la nube y no pisa nada que esta pantalla no conozca.
+    const fusionar = (data) => {
+      let srv = [];
+      if (data[key]) { try { const arr = JSON.parse(data[key]); if (Array.isArray(arr)) srv = arr; } catch (e) {} }
+      const local = gastosByYear[y] || [];
+      const ids = new Set(local.map(g => g.id));
+      const faltan = srv.filter(g => g && !ids.has(g.id) && !idsBorrados.has(g.id));
+      return { final: [...local, ...faltan], faltan: faltan.length };
+    };
+    let res;
+    pendingSaves++;
     try {
-      const data = await leerDocNube();
-      if (data[key]) { const arr = JSON.parse(data[key]); if (Array.isArray(arr)) srv = arr; }
+      const doc = await conTimeout(ref.get({ source: "server" }), 8000);
+      res = fusionar(doc.exists ? doc.data() : {});
+      await conTimeout(ref.set({ [key]: JSON.stringify(res.final) }, { merge: true }), 8000);
     } catch (e) {
       lastCloudError = e; aniosPendientes.add(y);
       showToast("📴 Sin conexión estable: este cambio del Diario NO se ha guardado todavía (para no pisar tus datos). Se enviará solo cuando vuelva la señal.", true, 9000);
       return false;
-    }
-    const local = gastosByYear[y] || [];
-    const ids = new Set(local.map(g => g.id));
-    const faltan = srv.filter(g => g && !ids.has(g.id) && !idsBorrados.has(g.id));
-    if (faltan.length) {
-      gastosByYear[y] = [...local, ...faltan];
+    } finally { pendingSaves--; }
+    gastosByYear[y] = res.final;
+    if (res.faltan) {
       if (typeof render === "function" && ready) render();
-      showToast(`🛟 Se han conservado ${faltan.length} gastos que esta pantalla no tenía cargados.`, false, 5000);
-    }
+      showToast(`🛟 Se han conservado ${res.faltan} gastos que esta pantalla no tenía cargados.`, false, 5000);
+    } else { pendingSync = false; showToast(); }
+    aniosPendientes.delete(y); guardarSnapshot(); guardarConteo(); respaldoNubeSuave();
+    return true;
   }
   const ok = await guardarClave(key, JSON.stringify(gastosByYear[y] || []));
-  if (ok) { aniosPendientes.delete(y); guardarSnapshot(); } else aniosPendientes.add(y);
+  if (ok) { aniosPendientes.delete(y); guardarSnapshot(); guardarConteo(); } else aniosPendientes.add(y);
   return ok;
 }
 // Reintenta lo que no pudo guardarse (al volver la conexión o la app).
@@ -790,10 +802,102 @@ async function recuperarGastosDelMovil() {
   showToast(`Recuperados ${n} gastos`);
 }
 
+// ---------- Aviso si faltan gastos respecto a la última vez ----------
+let avisoFaltan = null;   // { antes, ahora } mientras el aviso rojo esté activo
+const claveConteo = () => "mp_cnt_" + (currentUser ? currentUser.uid : "local");
+function guardarConteo() { try { localStorage.setItem(claveConteo(), String(totalGastos(gastosByYear))); } catch (e) {} }
+function comprobarBajada() {
+  let antes = null;
+  try { const v = localStorage.getItem(claveConteo()); antes = v === null ? null : Number(v); } catch (e) {}
+  const ahora = totalGastos(gastosByYear);
+  if (antes !== null && antes > 0 && (ahora === 0 || antes - ahora >= 3)) { avisoFaltan = { antes, ahora }; return; }
+  avisoFaltan = null; guardarConteo();
+}
+function renderAvisoFaltan() {
+  if (!avisoFaltan) return "";
+  const n = avisoFaltan.antes - avisoFaltan.ahora;
+  return `<div class="aviso-copia no-print" id="aviso-faltan">🚨 <span><strong>Faltan ${n} gastos del Diario</strong> respecto a la última vez (antes ${avisoFaltan.antes}, ahora ${avisoFaltan.ahora}). Si no los has borrado tú, no hagas nada más y recupéralos.</span>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;"><button class="btn small" id="btn-faltan-rec" type="button">🛟 Recuperar de este móvil</button><button class="btn small" id="btn-faltan-nube" type="button">☁️ Ver copias de la nube</button><button class="btn small" id="btn-faltan-ok" type="button">Está bien, los borré yo</button></div></div>`;
+}
+
+// ---------- Copia diaria en la nube (últimos 7 días) ----------
+const DIAS_RESPALDO = 7;
+let respaldoEstado = { ok: null, ultima: "", lista: null, error: "" };   // ok: null = sin probar
+let _respaldoOcupado = false, _respaldoUltimo = 0;
+const refRespaldos = () => db.collection("presupuestos").doc(currentUser.uid).collection("respaldos");
+const datosParaRespaldo = () => ({ version: 1, params, monthsDataByYear, goals, gastosByYear });
+async function respaldoNube() {
+  if (!(FIREBASE_CONFIGURED && currentUser) || datosDeCache || cloudReadFailed || _respaldoOcupado) return;
+  _respaldoOcupado = true;
+  try {
+    const hoy = hoyISO(), n = totalGastos(gastosByYear);
+    const ref = refRespaldos().doc(hoy);
+    const ya = await conTimeout(ref.get({ source: "server" }), 8000);
+    // No sustituye una copia del día por otra con MENOS gastos (así un fallo no estropea la copia buena).
+    if (!ya.exists || (Number(ya.data().nGastos) || 0) <= n) {
+      await conTimeout(ref.set({ fecha: hoy, creado: Date.now(), nGastos: n, datos: JSON.stringify(datosParaRespaldo()) }), 10000);
+    }
+    respaldoEstado.ok = true; respaldoEstado.ultima = hoy; respaldoEstado.error = "";
+    // Borra las de más de 7 días.
+    const lim = new Date(hoy + "T12:00:00"); lim.setDate(lim.getDate() - DIAS_RESPALDO);
+    const corte = lim.toISOString().slice(0, 10);
+    const todas = await conTimeout(refRespaldos().get({ source: "server" }), 8000);
+    for (const d of todas.docs) if (d.id < corte) { try { await d.ref.delete(); } catch (e) {} }
+  } catch (e) {
+    respaldoEstado.ok = /permission-denied/.test((e && (e.code || e.message)) || "") ? false : respaldoEstado.ok;
+    respaldoEstado.error = (e && (e.code || e.message)) || "error";
+    console.warn("Copia diaria en la nube:", e);
+  } finally { _respaldoOcupado = false; }
+}
+// Tras guardar gastos: como mucho una vez cada 5 minutos, sin hacer esperar a nadie.
+function respaldoNubeSuave() {
+  if (Date.now() - _respaldoUltimo < 300000) return;
+  _respaldoUltimo = Date.now();
+  respaldoNube().then(() => { if (typeof render === "function" && ready && activeTab === "ajustes") refrescarEstadoRespaldo(); });
+}
+async function listarRespaldos() {
+  const q = await conTimeout(refRespaldos().get({ source: "server" }), 8000);
+  return q.docs.map(d => { const x = d.data(); return { fecha: d.id, nGastos: x.nGastos || 0, creado: x.creado || 0 }; }).sort((a, b) => b.fecha.localeCompare(a.fecha));
+}
+function textoEstadoRespaldo() {
+  if (!(FIREBASE_CONFIGURED && currentUser)) return "Solo disponible con tu cuenta.";
+  if (respaldoEstado.ok === false) return "⚠️ No está activada: faltan permisos en las Reglas de Firebase (te explico cómo en el chat).";
+  if (respaldoEstado.ultima) return "✅ Activa. Última copia: " + respaldoEstado.ultima + ".";
+  return respaldoEstado.error ? "No se ha podido comprobar (" + respaldoEstado.error + ")." : "Comprobando…";
+}
+async function refrescarEstadoRespaldo() {
+  const t = document.getElementById("resp-estado"); if (t) t.textContent = textoEstadoRespaldo();
+  const box = document.getElementById("resp-lista"); if (!box || !(FIREBASE_CONFIGURED && currentUser)) return;
+  try {
+    const l = await listarRespaldos(); respaldoEstado.lista = l;
+    box.innerHTML = l.length ? l.map(x => `<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--border); font-size:13px;"><span>${x.fecha} · ${x.nGastos} gastos</span><button class="btn small secondary" type="button" data-resp="${x.fecha}" style="color:var(--fg); border-color:var(--border);">Restaurar</button></div>`).join("") : '<p style="font-size:12.5px; color:var(--gray); margin:6px 0 0;">Aún no hay copias.</p>';
+  } catch (e) { box.innerHTML = ""; }
+}
+async function restaurarRespaldo(fecha) {
+  try {
+    const doc = await conTimeout(refRespaldos().doc(fecha).get({ source: "server" }), 8000);
+    if (!doc.exists) { alert("Esa copia ya no existe."); return; }
+    const d = JSON.parse(doc.data().datos);
+    if (!d || typeof d.params !== "object" || typeof d.monthsDataByYear !== "object" || !Array.isArray(d.goals) || typeof d.gastosByYear !== "object") { alert("La copia no tiene el formato esperado."); return; }
+    const nG = totalGastos(d.gastosByYear);
+    if (!confirm(`Copia del ${fecha}: ${nG} gastos del Diario.\n\nRestaurar SUSTITUYE todo lo que tienes ahora en la app. ¿Continuar?`)) return;
+    await aplicarCopiaDatos(d);
+  } catch (e) { alert("No se ha podido restaurar: " + (e && e.message ? e.message : "error")); }
+}
+document.addEventListener("click", (e) => {
+  const t = e.target && e.target.closest ? e.target.closest("button") : null; if (!t) return;
+  if (t.id === "btn-faltan-rec") { recuperarGastosDelMovil().then(() => { if (!avisoFaltan) return; const n = totalGastos(gastosByYear); if (n >= avisoFaltan.antes) { avisoFaltan = null; guardarConteo(); render(); } }); }
+  else if (t.id === "btn-faltan-nube") { activeTab = "ajustes"; render(); const c = document.getElementById("resp-card"); if (c) c.scrollIntoView({ behavior: "smooth", block: "center" }); }
+  else if (t.id === "btn-faltan-ok") { avisoFaltan = null; guardarConteo(); render(); }
+  else if (t.dataset && t.dataset.resp) restaurarRespaldo(t.dataset.resp);
+});
+
 async function loadData() {
   if (cargaEnCurso) return cargaEnCurso;
-  cargaEnCurso = _loadData().finally(() => { cargaEnCurso = null; });
-  return cargaEnCurso;
+  const p = _loadData().finally(() => { cargaEnCurso = null; });
+  cargaEnCurso = p;
+  await p;
+  await generarSubsDiario();
 }
 async function _loadData() {
   cloudReadFailed = false;
@@ -801,6 +905,7 @@ async function _loadData() {
   if (data === null) return;   // no se pudo leer: no tocamos nada de lo que hay en pantalla
   const p = data["finanzas_parametros"];
   if (p) { try { params = { ...DEFAULT_PARAMS, ...JSON.parse(p) }; } catch (e) {} }
+  asegurarCatSubs();
   const m = data["finanzas_meses"];
   if (m) {
     try {
@@ -818,7 +923,9 @@ async function _loadData() {
   const g = data["finanzas_objetivos"];
   if (g) { try { goals = JSON.parse(g); } catch (e) {} }
   gastosByYear = parseGastos(data);   // se cambia de golpe, nunca queda vacío "a medias"
+  comprobarBajada();
   guardarSnapshot();
+  if (!avisoFaltan) respaldoNubeSuave();
   applyTheme(params.tema);
   applyDarkMode(!!params.modoOscuro);
 }
@@ -947,6 +1054,24 @@ async function compartirCopia() {
   try { XLSX.writeFile(wb, nombre); marcarCopiaHecha(fecha); showToast("Tu navegador no deja compartir: se ha descargado el Excel", false, 4000); }
   catch (e) { alert("No se ha podido guardar el Excel."); }
 }
+// Sustituye todo lo que hay en la app por los datos de una copia (Excel o copia diaria de la nube).
+async function aplicarCopiaDatos(d) {
+  params = { ...DEFAULT_PARAMS, ...d.params };
+  monthsDataByYear = d.monthsDataByYear;
+  migrarExcepcionales();
+  goals = d.goals;
+  const aniosViejos = Object.keys(gastosByYear);
+  gastosByYear = {};
+  Object.entries(d.gastosByYear).forEach(([y, arr]) => { if (Array.isArray(arr)) gastosByYear[y] = arr; });
+  activeYear = new Date().getFullYear();
+  monthsData = getMonthsForYear(activeYear);
+  applyTheme(params.tema); applyDarkMode(!!params.modoOscuro);
+  await saveParams(); await saveMonths(); await saveGoals();
+  for (const y of new Set([...aniosViejos, ...Object.keys(gastosByYear)])) await saveGastosYear(y, { reemplazo: true });
+  avisoFaltan = null; guardarConteo();
+  render();
+  showToast("Copia restaurada");
+}
 // Restaurar una copia de seguridad descargada con «Descargar copia de seguridad».
 async function restaurarCopia(file) {
   const msg = document.getElementById("restore-msg");
@@ -967,20 +1092,7 @@ async function restaurarCopia(file) {
     const nGastos = Object.values(d.gastosByYear).reduce((a, arr) => a + (Array.isArray(arr) ? arr.length : 0), 0);
     if (!confirm(`Esta copia tiene ${nMeses} meses con salario, ${nGastos} gastos del Diario y ${d.goals.length} objetivos.\n\nRestaurar SUSTITUYE todo lo que tienes ahora en la app. ¿Continuar?`)) return;
 
-    params = { ...DEFAULT_PARAMS, ...d.params };
-    monthsDataByYear = d.monthsDataByYear;
-    migrarExcepcionales();
-    goals = d.goals;
-    const aniosViejos = Object.keys(gastosByYear);
-    gastosByYear = {};
-    Object.entries(d.gastosByYear).forEach(([y, arr]) => { if (Array.isArray(arr)) gastosByYear[y] = arr; });
-    activeYear = new Date().getFullYear();
-    monthsData = getMonthsForYear(activeYear);
-    applyTheme(params.tema); applyDarkMode(!!params.modoOscuro);
-    await saveParams(); await saveMonths(); await saveGoals();
-    for (const y of new Set([...aniosViejos, ...Object.keys(gastosByYear)])) await saveGastosYear(y, { reemplazo: true });
-    render();
-    showToast("Copia restaurada");
+    await aplicarCopiaDatos(d);
   } catch (e) {
     console.error("Error restaurando", e);
     aviso("No se ha podido restaurar: " + (e && e.message ? e.message : "error desconocido"), "var(--red)");
@@ -1289,6 +1401,7 @@ function renderMensual() {
   ` : "";
 
   return `
+    ${renderAvisoFaltan()}
     ${renderAvisoTamano()}
     ${renderYearSwitch()}
     <div class="month-scroller">${pills}</div>
@@ -1943,7 +2056,7 @@ function renderSubsCard() {
     : `Cada mes, día ${sb.dia || 1}`;
   const dias = d => { const n = Math.round((d - h0) / 86400000); return n === 0 ? "hoy" : n === 1 ? "mañana" : "en " + n + " días"; };
   return `
-    <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Apunta aquí tus suscripciones: el total al mes es el importe de «Suscripciones» en gastos fijos, y se actualiza solo al añadir, cambiar o borrar (vale desde el mes de «Aplicar cambios desde»).</p>
+    <p style="font-size:12.5px; color:var(--gray); margin:0 0 10px;">Apunta aquí tus suscripciones: el total al mes es el importe de «Suscripciones» en gastos fijos, y se actualiza solo al añadir, cambiar o borrar (vale desde el mes de «Aplicar cambios desde»). Además, cada una se apunta sola en el Diario el día de cobro (categoría 🔁 Suscripciones) para que cuadre con el saldo de tu banco; no cuenta dos veces en el ocio.</p>
     ${items.length ? items.map(({ sb, prox }) => `
       <div class="result-row">
         <span class="label" style="flex:1; min-width:0; padding-right:10px;">${escapeHtml(sb.nombre)}<span style="display:block; font-size:11px; color:var(--light-gray); font-weight:400; margin-top:2px;">${cuando(sb)} · próximo cobro: ${subTextoFecha(prox)} (${dias(prox)})</span></span>
@@ -2139,6 +2252,13 @@ function renderAjustes() {
       <p style="font-size:12.5px; color:var(--gray); margin:16px 0 10px;">Además, la app guarda sola una copia de tus gastos del Diario en este móvil. Si algún día faltan gastos, este botón los recupera (solo añade los que no estén).</p>
       <button class="btn secondary" id="btn-snap" type="button" style="color:var(--fg); border-color:var(--border);">🛟 Recuperar gastos guardados en este móvil</button>
       <p id="snap-msg" style="font-size:12.5px; margin:10px 0 0; display:none;"></p>
+    </div>
+
+    <div class="section-title">Copias diarias en la nube</div>
+    <div class="card" id="resp-card">
+      <p style="font-size:12.5px; color:var(--gray); margin:0 0 8px;">Cada día la app guarda sola una copia completa de tus datos en tu cuenta de Firebase y conserva las de los últimos ${DIAS_RESPALDO} días. Sirve para volver a un día concreto aunque pierdas el móvil.</p>
+      <p id="resp-estado" style="font-size:13px; margin:0 0 6px;">${textoEstadoRespaldo()}</p>
+      <div id="resp-lista"></div>
     </div>
 
     <button class="btn secondary" id="btn-reset">Borrar todos mis datos</button>
@@ -2457,7 +2577,7 @@ function attachHandlers() {
     if (!confirm("¿Borrar esta suscripción de la lista? (No cambia ningún cálculo.)")) return;
     params.subsLista = (params.subsLista || []).filter(x => x.id !== id);
     if (subEditId === id) subEditId = null;
-    sincronizarSubs(); saveParams(); render();
+    sincronizarSubs(); saveParams(); render(); generarSubsDiario();
   });
   const subCancel = document.getElementById("btn-sub-cancel");
   if (subCancel) subCancel.onclick = () => { subEditId = null; render(); };
@@ -2475,7 +2595,7 @@ function attachHandlers() {
       ? (params.subsLista || []).map(x => x.id === subEditId ? reg : x)
       : [...(params.subsLista || []), reg];
     subEditId = null;
-    sincronizarSubs(); saveParams(); render();
+    sincronizarSubs(); saveParams(); render(); generarSubsDiario();
   };
   function bindHistorial() { document.querySelectorAll("[data-hist-campo]").forEach(btn => {
     btn.onclick = () => {
@@ -2511,6 +2631,7 @@ function attachHandlers() {
 
   const snapBtn = document.getElementById("btn-snap");
   if (snapBtn) snapBtn.onclick = recuperarGastosDelMovil;
+  refrescarEstadoRespaldo();
 
   const logoutBtn = document.getElementById("btn-logout");
   if (logoutBtn) logoutBtn.onclick = () => { if (auth) auth.signOut(); };
@@ -2564,6 +2685,7 @@ function updatePillState() {
 
 // ================= GASTOS DIARIOS =================
 let gastosByYear = {};   // { "2026": [ {id, fecha:"AAAA-MM-DD", concepto, importe, cat} ] }
+const SUBS_CAT = "suscripciones";
 const DEFAULT_CATS = [
   { id: "compra",      n: "Compra",       e: "🛒", ajuste: "compra" },
   { id: "comida",      n: "Comida",       e: "🍔", ajuste: "ocio" },
@@ -2578,7 +2700,12 @@ const DEFAULT_CATS = [
   { id: "loteria",     n: "Lotería",      e: "🎟️" },
   { id: "videojuegos", n: "Videojuegos",  e: "🕹️" },
   { id: "ropa",        n: "Ropa",         e: "👕" },
+  { id: SUBS_CAT,     n: "Suscripciones", e: "🔁" },
 ];
+// Si el usuario tiene su propia lista de categorías, nos aseguramos de que exista la de suscripciones.
+function asegurarCatSubs() {
+  if (params.categorias && params.categorias.length && !params.categorias.some(c => c.id === SUBS_CAT)) params.categorias.push({ id: SUBS_CAT, n: "Suscripciones", e: "🔁" });
+}
 function getCats() { return (params.categorias && params.categorias.length) ? params.categorias : DEFAULT_CATS; }
 const INGRESO_CATS = [
   { id: "in-bizum", n: "Bizum recibido", e: "📲" },
@@ -2634,11 +2761,27 @@ function estadoLimites(lista) {
   });
 }
 function renderAvisosLimites(lista) {
-  const av = estadoLimites(lista).filter(x => x.pct >= 80).sort((a, b) => b.pct - a.pct);
-  if (!av.length) return "";
-  return av.map(x => x.pct > 100
-    ? `<div class="warn-banner">🔴 ${x.c.e} ${escapeHtml(x.c.n)}: te has pasado ${euro(x.g - x.limite)} (${euro(x.g)} de ${euro(x.limite)})</div>`
-    : `<div class="warn-banner" style="background:#FFF6D9; color:#8A6D1D; border-color:#F0DFA0;">🟡 ${x.c.e} ${escapeHtml(x.c.n)}: ${euro(x.g)} de ${euro(x.limite)} (${x.pct.toFixed(0)} %). Te quedan ${euro(x.limite - x.g)}</div>`).join("");
+  const out = [];   // {pct, html}
+  const rojo = (emoji, nombre, exceso) => `<div class="warn-banner">🔴 ${emoji} ${escapeHtml(nombre)}: te has pasado ${euro(exceso)}</div>`;
+  // Categorías con límite propio
+  estadoLimites(lista).filter(x => x.pct >= 80).forEach(x => out.push({
+    pct: x.pct,
+    html: x.pct > 100
+      ? rojo(x.c.e, x.c.n, x.g - x.limite)
+      : `<div class="warn-banner" style="background:#FFF6D9; color:#8A6D1D; border-color:#F0DFA0;">🟡 ${x.c.e} ${escapeHtml(x.c.n)}: ${euro(x.g)} de ${euro(x.limite)} (${x.pct.toFixed(0)} %). Te quedan ${euro(x.limite - x.g)}</div>`
+  }));
+  // Presupuestos de «Cómo vas» (gasolina, compra, ocio): también avisan cuando te pasas
+  const { y, m } = gastosView;
+  const mData = getMonthsForYear(y)[m];
+  if (mData) {
+    const t = sumaPorCat(lista), gastado = { ocio: 0, gasolina: 0, compra: 0 }, hay = {};
+    getCats().forEach(c => { if (c.ajuste && c.id !== SUBS_CAT) { hay[c.ajuste] = true; gastado[c.ajuste] += t[c.id] || 0; } });
+    const r = calcMonth(mData);
+    [["gasolina", "⛽", "Gasolina", pv("gasolina", mData)], ["compra", "🛒", "Compra", pv("compra", mData)], ["ocio", "🎉", "Ocio y comida fuera", r ? r.ocioPresupuestado : null]]
+      .filter(f => hay[f[0]] && f[3] > 0 && gastado[f[0]] > f[3])
+      .forEach(f => out.push({ pct: gastado[f[0]] / f[3] * 100, html: rojo(f[1], f[2], gastado[f[0]] - f[3]) }));
+  }
+  return out.sort((a, b) => b.pct - a.pct).map(x => x.html).join("");
 }
 // «Cómo vas»: lo apuntado en el mes frente al presupuesto de cada ajuste (no cambia ningún dato).
 function renderComoVas(y, m, lista) {
@@ -2674,6 +2817,39 @@ function renderComoVas(y, m, lista) {
 }
 
 // Compara lo gastado este mes con el mes anterior, a la misma altura del mes si es el mes en curso.
+// ---------- Suscripciones que se apuntan solas en el Diario ----------
+function diaAntes(iso) { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() - 1); return d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate()); }
+// Un cobro por suscripción y periodo (mes, o año si es anual): aunque cambies el día en Ajustes no se duplica.
+const subsClave = (sb, iso) => sb.id + "|" + (sb.frec === "anual" ? iso.slice(0, 4) : iso.slice(0, 7));
+let _generandoSubs = false;
+async function generarSubsDiario() {
+  if (_generandoSubs || cloudReadFailed || datosDeCache) return 0;
+  const lista = params.subsLista || [];
+  if (!lista.length) return 0;
+  if (!params.subsDesde) { params.subsDesde = hoyISO().slice(0, 8) + "01"; saveParams(); }
+  _generandoSubs = true;
+  try {
+    const cobros = subsCobradasEntre(diaAntes(params.subsDesde), hoyISO());
+    const omit = new Set(params.subsAutoOmitidas || []);
+    const existentes = new Set(Object.values(gastosByYear).flat().filter(g => g && g.auto).map(g => g.auto));
+    const porId = {}; lista.forEach(x => { porId[x.id] = x; });
+    const tocados = new Set(); let n = 0;
+    cobros.items.forEach(it => {
+      const clave = subsClave(porId[it.id], it.fecha);
+      if (existentes.has(clave) || omit.has(clave)) return;
+      asegurarCatSubs();
+      const y = it.fecha.slice(0, 4);
+      (gastosByYear[y] = gastosByYear[y] || []).push({ id: Date.now() + n, fecha: it.fecha, concepto: it.nombre, importe: it.importe, cat: SUBS_CAT, auto: clave });
+      existentes.add(clave); tocados.add(y); n++;
+    });
+    if (n) {
+      for (const y of tocados) await saveGastosYear(y);
+      if (typeof render === "function" && ready) render();
+      showToast(`🔁 ${n} suscripción${n === 1 ? "" : "es"} apuntada${n === 1 ? "" : "s"} en el Diario`, false, 3500);
+    }
+    return n;
+  } finally { _generandoSubs = false; }
+}
 // ---------- Comprobar saldo de la cuenta del día a día (Diario) ----------
 let compINGres = null;
 function movimientosING(desde, hasta) {
@@ -2684,6 +2860,24 @@ function movimientosING(desde, hasta) {
     else { gastos += Number(g.importe) || 0; nGastos++; }
   });
   return { gastos: round2(gastos), nGastos, ingresos: round2(ingresos) };
+}
+// Suscripciones que ya se han cobrado entre dos fechas (desde excluida, hasta incluida): para rellenar «Otros pagos».
+function subsCobradasEntre(desde, hasta) {
+  const items = [];
+  const y0 = Number(desde.slice(0, 4)), m0 = Number(desde.slice(5, 7)) - 1, y1 = Number(hasta.slice(0, 4)), m1 = Number(hasta.slice(5, 7)) - 1;
+  for (let y = y0, m = m0; y < y1 || (y === y1 && m <= m1); m++) {
+    if (m > 11) { m = 0; y++; if (y > y1) break; }
+    (params.subsLista || []).forEach(sb => {
+      const imp = Number(sb.importe) || 0; if (!imp) return;
+      if (sb.frec === "anual" && Math.min(Math.max(parseInt(sb.mes) || 0, 0), 11) !== m) return;
+      const dia = Math.min(Math.max(parseInt(sb.dia) || 1, 1), new Date(y, m + 1, 0).getDate());
+      const iso = y + "-" + p2(m + 1) + "-" + p2(dia);
+      if (iso > desde && iso <= hasta) items.push({ id: sb.id, nombre: sb.nombre || "Suscripción", importe: imp, fecha: iso });
+    });
+    if (y === y1 && m === m1) break;
+  }
+  items.sort((a, b) => a.fecha.localeCompare(b.fecha));
+  return { items, total: round2(items.reduce((a, x) => a + x.importe, 0)) };
 }
 function renderComprobarING() {
   const nombre = escapeHtml(cn("diario"));
@@ -2698,6 +2892,9 @@ function renderComprobarING() {
     </div>`;
   const hoy = hoyISO();
   const mv = movimientosING(a.fecha, hoy);
+  // Desde que las suscripciones se apuntan solas en el Diario ya van dentro de «gastos del Diario»; aquí solo las anteriores.
+  const hastaSubs = params.subsDesde ? diaAntes(params.subsDesde) : hoy;
+  const subsAuto = hastaSubs > a.fecha ? subsCobradasEntre(a.fecha, hastaSubs) : { items: [], total: 0 };
   const r = compINGres;
   let res = "";
   if (r) {
@@ -2716,9 +2913,9 @@ function renderComprobarING() {
       <p style="font-size:12.5px; color:var(--gray); margin:0 0 8px;">Punto de partida: <strong>${euro(a.saldo)}</strong> el ${fechaBonita(a.fecha).split(",").slice(-1)[0].trim()}. Desde el día siguiente llevas <strong>${euro(mv.gastos)}</strong> en ${mv.nGastos} gastos del Diario${mv.ingresos ? ` y ${euro(mv.ingresos)} de ingresos apuntados` : ""}.</p>
       <div class="two-col">
         <div class="field"><label>Pasado a ${nombre} desde entonces (€)</label><input type="text" class="signed-input" inputmode="decimal" autocomplete="off" id="ci-entradas" placeholder="Ej. 600"></div>
-        <div class="field"><label>Otros pagos sin apuntar (€)</label><input type="text" class="signed-input" inputmode="decimal" autocomplete="off" id="ci-otros" placeholder="Ej. 300"></div>
+        <div class="field"><label>Otros pagos sin apuntar (€)</label><input type="text" class="signed-input" inputmode="decimal" autocomplete="off" id="ci-otros" placeholder="Ej. 300"${subsAuto.total ? ` value="${String(subsAuto.total).replace(".", ",")}"` : ""}></div>
       </div>
-      <p style="font-size:11.5px; color:var(--gray); margin:-4px 0 10px;">En «Otros pagos» pon lo que sale de ${nombre} sin estar en el Diario: alquiler, suscripciones, gastos excepcionales cargados ahí…</p>
+      <p style="font-size:11.5px; color:var(--gray); margin:-4px 0 10px;">En «Otros pagos» pon lo que sale de ${nombre} sin estar en el Diario (gastos excepcionales cargados ahí…).${subsAuto.items.length ? ` <strong>Ya va rellenado con las suscripciones cobradas antes de que se apuntaran solas en el Diario:</strong> ${subsAuto.items.map(x => `${escapeHtml(x.nombre)} ${euro(x.importe)} (${subTextoFecha(new Date(x.fecha + "T12:00:00"))})`).join(", ")}. Si algún cargo aún no te ha llegado al banco, quítalo del número; y si tienes otros pagos, súmalos.` : " Las suscripciones ya van dentro de los gastos del Diario (se apuntan solas el día de cobro)."}</p>
       <div class="field"><label>Saldo real en ${nombre} ahora (€)</label><input type="text" class="signed-input" inputmode="decimal" autocomplete="off" id="ci-real" placeholder="Ej. 380"></div>
       <button class="btn" id="ci-btn" type="button">Comprobar</button>
       ${res}
@@ -2832,6 +3029,7 @@ function renderGastos() {
   const maxCat = cats.length ? porCat[cats[0].id] : 1;
 
   return `
+    ${renderAvisoFaltan()}
     ${renderAvisoCopia()}
     <div class="year-switch">
       <button id="g-prev" aria-label="Mes anterior">‹</button>
@@ -2939,7 +3137,7 @@ function renderGastosLista() {
         ${items.slice().sort((a, b) => b.id - a.id).map(g => `
           <div class="g-row">
             <span class="g-emoji">${catDe(g.cat).e}</span>
-            <span class="g-main"><span class="g-name">${escapeHtml(g.concepto)}</span><span class="g-cat">${catDe(g.cat).n}</span></span>
+            <span class="g-main"><span class="g-name">${escapeHtml(g.concepto)}</span><span class="g-cat">${catDe(g.cat).n}${g.auto ? " · 🔁 automático" : ""}</span></span>
             <span class="g-amt">${euro(g.importe)}</span>
             <button class="goal-delete g-btn" data-g-edit="${g.id}" aria-label="Editar">✎</button>
             <button class="goal-delete g-btn" data-g-del="${g.id}" aria-label="Borrar">✕</button>
@@ -2954,7 +3152,7 @@ function calcAjustesDesdeGastos(y, m, lista) {
   const t = sumaPorCat(lista);
   const porAjuste = { ocio: 0, gasolina: 0, compra: 0 };
   const hay = { ocio: false, gasolina: false, compra: false };
-  getCats().forEach(c => { if (c.ajuste && t[c.id] > 0) { porAjuste[c.ajuste] += t[c.id]; hay[c.ajuste] = true; } });
+  getCats().forEach(c => { if (c.ajuste && c.id !== SUBS_CAT && t[c.id] > 0) { porAjuste[c.ajuste] += t[c.id]; hay[c.ajuste] = true; } });
   const r = calcMonth(mData);
   const res = [];
   if (hay.gasolina) res.push({ campo: "ajusteGasolina", nombre: "Gasolina", gastado: porAjuste.gasolina, presup: pv("gasolina", mData) });
@@ -2962,7 +3160,7 @@ function calcAjustesDesdeGastos(y, m, lista) {
   if (hay.ocio && r) res.push({ campo: "ajusteOcio", nombre: "Ocio y comida fuera", gastado: porAjuste.ocio, presup: r.ocioPresupuestado });
   res.forEach(x => { x.ajuste = round2(x.gastado - x.presup); });
   const sinSalario = hay.ocio && !r;
-  const sinAsignar = getCats().filter(c => !c.ajuste && t[c.id] > 0).map(c => `${c.e} ${c.n} ${euro(t[c.id])}`);
+  const sinAsignar = getCats().filter(c => !c.ajuste && c.id !== SUBS_CAT && t[c.id] > 0).map(c => `${c.e} ${c.n} ${euro(t[c.id])}`);
   return { mData, res, sinSalario, sinAsignar };
 }
 
@@ -3184,6 +3382,7 @@ function attachGastosHandlers() {
     if (!esIng) gastoUltimaCat = cat;
     const nuevo = { id: gastoEditId || Date.now(), fecha, concepto: texto, importe: round2(importe), cat };
     if (esIng) nuevo.tipo = "ingreso";
+    if (editandoReg && editandoReg.auto) nuevo.auto = editandoReg.auto;
     const anioNuevo = fecha.slice(0, 4);
     const tocados = new Set([anioNuevo]);
     if (gastoEditId) {
@@ -3259,6 +3458,7 @@ function bindGastosLista() {
     const reg = Object.values(gastosByYear).flat().find(g => g.id === id);
     if (!reg) return;
     idsBorrados.add(id);
+    if (reg.auto) { params.subsAutoOmitidas = [...new Set([...(params.subsAutoOmitidas || []), reg.auto])]; saveParams(); }
     const tocados = [];
     Object.keys(gastosByYear).forEach(a => {
       const n = gastosByYear[a].length;
@@ -3286,6 +3486,7 @@ document.getElementById("undo-btn").onclick = async () => {
   ocultarDeshacer();
   await esperarCarga();
   idsBorrados.delete(reg.id);
+  if (reg.auto && (params.subsAutoOmitidas || []).includes(reg.auto)) { params.subsAutoOmitidas = params.subsAutoOmitidas.filter(k => k !== reg.auto); saveParams(); }
   const a = String(reg.fecha.slice(0, 4));
   gastosByYear[a] = gastosByYear[a] || [];
   if (!gastosByYear[a].some(g => g.id === reg.id)) gastosByYear[a].push(reg);
